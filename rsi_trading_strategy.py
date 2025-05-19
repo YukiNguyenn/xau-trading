@@ -84,14 +84,19 @@ class AdvancedTradingStrategy:
         # Danh sách các vị thế đang mở
         self.open_trades = []
 
-    def _get_priority(self, rsi_short, rsi_medium, rsi_long, macd_crossover):
-        """Xác định cấp độ ưu tiên của lệnh dựa trên các chỉ báo"""
+    def _get_priority(self, rsi_short, rsi_medium, rsi_long, macd_crossover, breakout_distance):
+        """Xác định cấp độ ưu tiên của lệnh dựa trên các chỉ báo và khoảng cách breakout"""
+        # Tính breakout score với giá trị tối thiểu
+        min_score = self.priority_levels['high']['breakout_min_score']
+        breakout_score = max(min(breakout_distance / 0.01, 1), min_score)
+        
         for level in ['high', 'medium', 'low']:
             level_config = self.priority_levels[level]
             if (rsi_short <= level_config['rsi_short'] and
                 rsi_medium <= level_config['rsi_medium'] and
                 rsi_long <= level_config['rsi_long'] and
-                (level_config['macd_crossover'] or macd_crossover)):
+                (level_config['macd_crossover'] or macd_crossover) and
+                breakout_score >= level_config['breakout_min_score']):
                 return level
         return 'low'
 
@@ -103,36 +108,163 @@ class AdvancedTradingStrategy:
                 self.open_trades.remove(trade)
 
     def close_position(self, ticket):
-        """Đóng một vị thế cụ thể"""
+        """Đóng một vị thế cụ thể với xử lý lỗi MT5"""
         try:
+            # Kiểm tra kết nối MT5
+            if not mt5.initialize():
+                print(f"MT5 initialization failed: {mt5.last_error()}")
+                return False
+                
+            # Kiểm tra tài khoản
+            if not mt5.login(self.account, password=self.password, server=self.server):
+                print(f"MT5 login failed: {mt5.last_error()}")
+                return False
+                
+            # Lấy thông tin vị thế
             position = mt5.positions_get(ticket=ticket)
-            if position:
-                position = position[0]
+            if not position:
+                print(f"Position {ticket} not found")
+                return False
                 
-                # Tạo lệnh đóng vị thế
-                request = {
-                    "action": mt5.TRADE_ACTION_DEAL,
-                    "symbol": self.symbol,
-                    "volume": position.volume,
-                    "type": mt5.ORDER_TYPE_SELL if position.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY,
-                    "price": mt5.symbol_info_tick(self.symbol).ask if position.type == mt5.ORDER_TYPE_BUY else mt5.symbol_info_tick(self.symbol).bid,
-                    "type_time": mt5.ORDER_TIME_GTC,
-                    "type_filling": mt5.ORDER_FILLING_IOC,
-                    "position": ticket
-                }
+            position = position[0]
+            
+            # Lấy giá hiện tại
+            symbol_info = mt5.symbol_info_tick(self.symbol)
+            if not symbol_info:
+                print(f"Failed to get symbol info for {self.symbol}")
+                return False
                 
-                result = mt5.order_send(request)
-                if result.retcode == mt5.TRADE_RETCODE_DONE:
-                    print(f"Position {ticket} closed successfully")
-                    self.open_tickets.remove(ticket)
-                    return True
-                else:
-                    print(f"Failed to close position {ticket}: {mt5.last_error()}")
-                    return False
+            # Tạo lệnh đóng vị thế
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": self.symbol,
+                "volume": position.volume,
+                "type": mt5.ORDER_TYPE_SELL if position.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY,
+                "price": symbol_info.ask if position.type == mt5.ORDER_TYPE_BUY else symbol_info.bid,
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
+                "position": ticket
+            }
+            
+            # Gửi lệnh
+            result = mt5.order_send(request)
+            if result.retcode == mt5.TRADE_RETCODE_DONE:
+                print(f"Position {ticket} closed successfully")
+                self.open_tickets.remove(ticket)
+                return True
+                
+            print(f"Failed to close position {ticket}: {mt5.last_error()}")
             return False
             
         except Exception as e:
             print(f"Error closing position {ticket}: {str(e)}")
+            return False
+
+    def place_order(self, order_type, volume, price, sl, tp, rsi_values, macd_crossover, breakout_distance):
+        """
+        Đặt lệnh giao dịch với xử lý lỗi và hệ thống ưu tiên
+        Args:
+            order_type: Loại lệnh (mt5.ORDER_TYPE_BUY hoặc mt5.ORDER_TYPE_SELL)
+            volume: Khối lượng giao dịch
+            price: Giá vào lệnh
+            sl: Giá stop loss
+            tp: Giá take profit
+            rsi_values: Tuple (rsi_short, rsi_medium, rsi_long)
+            macd_crossover: True nếu có sự giao nhau của MACD
+            breakout_distance: Khoảng cách breakout
+        Returns:
+            bool: True nếu thành công, False nếu thất bại
+        """
+        try:
+            # Xác định cấp độ ưu tiên
+            priority = self._get_priority(*rsi_values, macd_crossover, breakout_distance)
+            
+            # Kiểm tra số lượng vị thế đang mở
+            if len(self.open_trades) >= self.max_open_positions and priority != 'low':
+                self._close_low_priority_trades(priority)
+                
+            # Kiểm tra số lượng vị thế đang mở sau khi đóng lệnh
+            if len(self.open_trades) >= self.max_open_positions:
+                print("Maximum open positions reached")
+                return False
+
+            # Kiểm tra kết nối MT5
+            if not mt5.initialize():
+                error = mt5.last_error()
+                print(f"MT5 initialization failed: {error}")
+                return False
+                
+            # Kiểm tra tài khoản
+            if not mt5.login(self.account, password=self.password, server=self.server):
+                error = mt5.last_error()
+                print(f"MT5 login failed: {error}")
+                return False
+                
+            # Kiểm tra khối lượng
+            if volume < self.min_volume or volume > self.max_volume:
+                print(f"Invalid volume: {volume}")
+                return False
+                
+            # Kiểm tra giá
+            if price <= 0 or sl <= 0 or tp <= 0:
+                print(f"Invalid price: {price}, sl: {sl}, tp: {tp}")
+                return False
+                
+            # Kiểm tra spread hiện tại
+            symbol_info = mt5.symbol_info(self.symbol)
+            if not symbol_info:
+                print(f"Failed to get symbol info for {self.symbol}")
+                return False
+                
+            spread = symbol_info.spread
+            if spread > self.spread_points:
+                print(f"Current spread {spread} exceeds maximum allowed {self.spread_points}")
+                return False
+                
+            # Tạo lệnh
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": self.symbol,
+                "volume": volume,
+                "type": order_type,
+                "price": price,
+                "sl": sl,
+                "tp": tp,
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
+            }
+            
+            # Gửi lệnh
+            result = mt5.order_send(request)
+            
+            # Kiểm tra kết quả
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                error = mt5.last_error()
+                print(f"Order failed: {error}")
+                return False
+                
+            # Kiểm tra ticket trùng
+            if result.order in self.open_tickets:
+                print(f"Duplicate ticket {result.order} detected")
+                return False
+                
+            # Lưu thông tin vị thế
+            trade = {
+                'ticket': result.order,
+                'entry': price,
+                'sl': sl,
+                'tp': tp,
+                'priority': priority,
+                'profit': 0
+            }
+            self.open_tickets.add(result.order)
+            self.open_trades.append(trade)
+            
+            print(f"Order placed successfully: {result.order}, Priority: {priority}")
+            return True
+            
+        except Exception as e:
+            print(f"Error placing order: {str(e)}")
             return False
 
     def _load_config(self, config_path):

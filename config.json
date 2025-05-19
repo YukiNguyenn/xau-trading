@@ -38,8 +38,12 @@
         }
     },
     "costs": {
-        "spread_points": 20,
-        "commission": 0.0001
+        "commission": 0.0001,
+        "spread": {
+            "min_points": 20,
+            "max_points": 50,
+            "default_points": 20
+        }
     },
     "position_management": {
         "max_open_positions": 3,
@@ -48,19 +52,22 @@
                 "rsi_short": 80,
                 "rsi_medium": 70,
                 "rsi_long": 60,
-                "macd_crossover": true
+                "macd_crossover": true,
+                "breakout_min_score": 0.1
             },
             "medium": {
                 "rsi_short": 75,
                 "rsi_medium": 65,
                 "rsi_long": 55,
-                "macd_crossover": true
+                "macd_crossover": true,
+                "breakout_min_score": 0.1
             },
             "low": {
                 "rsi_short": 70,
                 "rsi_medium": 60,
                 "rsi_long": 50,
-                "macd_crossover": false
+                "macd_crossover": false,
+                "breakout_min_score": 0.1
             }
         }
     },

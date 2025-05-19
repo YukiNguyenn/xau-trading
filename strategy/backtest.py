@@ -1,8 +1,15 @@
 """Module backtest cho chiến lược giao dịch"""
 
 import pandas as pd
+import numpy as np
+import ta
+import json
 from datetime import datetime
+import logging
 from typing import Dict, List, Tuple
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from matplotlib.ticker import FuncFormatter
 
 class Backtest:
     def __init__(self, symbol: str, risk_params: Dict, trading_params: Dict, position_params: Dict):
@@ -33,12 +40,7 @@ class Backtest:
                 return None
             self.point = point
         return point
-        self.spread_points = trading_params.get('spread_points', 20)
-        self.commission = trading_params.get('commission', 0.0001)
-        self.trailing_stop_points = trading_params.get('trailing_stop_points', 300)
-        self.stop_loss_points = risk_params.get('stop_loss_points', 500)
-        self.take_profit_points = risk_params.get('take_profit_points', 1000)
-
+        
     def calculate_levels(self, price: float, trend: str) -> Tuple[float, float, float]:
         """Tính các mức vào lệnh với kiểm tra point"""
         point = self.get_point()
@@ -80,7 +82,7 @@ class Backtest:
         results['execution_time'] = execution_time
         return results
 
-    def backtest(self, df: pd.DataFrame, symbol: str, timeframe: str = 'H4') -> Dict:
+    def backtest(self, df: pd.DataFrame, symbol: str, timeframe: str = 'H4', plot_results: bool = True) -> Dict:
         """
         Chạy backtest với giới hạn vị thế và ưu tiên
         Args:
@@ -100,7 +102,11 @@ class Backtest:
             'max_drawdown': 0,
             'trades': [],
             'open_positions': 0,
-            'rejected_trades': 0
+            'rejected_trades': 0,
+            'avg_priority': 0,
+            'high_priority_trades': 0,
+            'medium_priority_trades': 0,
+            'low_priority_trades': 0
         }
         
         # Kiểm tra và lấy point
@@ -128,6 +134,7 @@ class Backtest:
 
         # Danh sách các vị thế đang mở
         open_trades = []
+        total_priority = 0
 
         try:
             for i in range(len(df)):
@@ -141,8 +148,26 @@ class Backtest:
                 if future_prices.isnull().any():
                     continue
                     
+                # Tính khoảng cách breakout
+                breakout_distance = abs(current_row['close'] - current_row['ema200'])
+                
                 # Xác định cấp độ ưu tiên
-                priority = self._get_priority(current_row)
+                priority = self._get_priority(
+                    current_row['rsi_short'],
+                    current_row['rsi_medium'],
+                    current_row['rsi_long'],
+                    current_row['macd'] > current_row['macd_signal'],
+                    breakout_distance
+                )
+                
+                # Cập nhật thống kê priority
+                total_priority += self.priority_levels[priority]['weight']
+                if priority == 'high':
+                    results['high_priority_trades'] += 1
+                elif priority == 'medium':
+                    results['medium_priority_trades'] += 1
+                else:
+                    results['low_priority_trades'] += 1
                 
                 # Kiểm tra và đóng các vị thế có ưu tiên thấp hơn
                 if len(open_trades) >= self.max_open_positions and priority != 'low':
@@ -199,6 +224,10 @@ class Backtest:
             for trade in results['trades']:
                 equity.append(equity[-1] + trade['profit'])
             results['max_drawdown'] = min(equity) - max(equity)
+            
+            # Tính trung bình priority
+            if results['total_trades'] > 0:
+                results['avg_priority'] = total_priority / results['total_trades']
 
         except Exception as e:
             print(f"Error during backtest: {str(e)}")
@@ -206,22 +235,98 @@ class Backtest:
 
         return results
 
-    def _get_priority(self, row):
+    def _get_priority(self, rsi_short: float, rsi_medium: float, rsi_long: float, macd_crossover: bool, breakout_distance: float) -> str:
         """Xác định cấp độ ưu tiên của lệnh dựa trên RSI và MACD"""
         for level in ['high', 'medium', 'low']:
             level_config = self.priority_levels[level]
-            if (row['rsi_short'] <= level_config['rsi_short'] and
-                row['rsi_medium'] <= level_config['rsi_medium'] and
-                row['rsi_long'] <= level_config['rsi_long'] and
-                (level_config['macd_crossover'] or row['macd'] > row['macd_signal'])):
+            if (rsi_short <= level_config['rsi_short'] and
+                rsi_medium <= level_config['rsi_medium'] and
+                rsi_long <= level_config['rsi_long'] and
+                (level_config['macd_crossover'] or macd_crossover)):
                 return level
         return 'low'
 
-    def _close_low_priority_trades(self, open_trades, new_priority):
-        """Đóng các vị thế có ưu tiên thấp hơn để nhường chỗ cho lệnh mới"""
-        for trade in open_trades[:]:  # Copy list để tránh lỗi khi thay đổi trong vòng lặp
-            if trade['priority'] < new_priority and trade['profit'] > 0:
+    def _close_low_priority_trades(self, open_trades: List[Dict], new_priority: str):
+        """Đóng các vị thế có ưu tiên thấp hơn vị thế mới"""
+        # Sắp xếp các vị thế theo ưu tiên từ thấp đến cao
+        open_trades.sort(key=lambda x: self.priority_levels[x['priority']]['weight'])
+        
+        # Đóng các vị thế có ưu tiên thấp hơn
+        for trade in open_trades[:]:
+            if self.priority_levels[trade['priority']]['weight'] < self.priority_levels[new_priority]['weight']:
+                self.close_position(trade['ticket'])
                 open_trades.remove(trade)
+                
+    def plot_backtest_results(self, results: Dict):
+        """
+        Vẽ biểu đồ equity curve và phân phối lợi nhuận
+        Args:
+            results: Kết quả backtest
+        """
+        if not results['trades']:
+            print("Không có giao dịch để vẽ biểu đồ")
+            return
+
+        # Tính equity curve
+        equity = [0]
+        times = []
+        profits = []
+        
+        for trade in results['trades']:
+            equity.append(equity[-1] + trade['profit'])
+            times.append(trade['time'])
+            profits.append(trade['profit'])
+
+        # Tạo figure với kích thước lớn
+        plt.figure(figsize=(14, 10))
+        
+        # Biểu đồ equity curve
+        plt.subplot(2, 1, 1)
+        plt.plot(times, equity[1:], label='Equity Curve')
+        
+        # Định dạng ngày tháng
+        plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+        plt.gca().xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+        plt.gcf().autofmt_xdate()
+        
+        # Định dạng số tiền
+        def money_formatter(x, pos):
+            return f'${x:,.0f}'
+        plt.gca().yaxis.set_major_formatter(FuncFormatter(money_formatter))
+        
+        # Thêm các chỉ số thống kê vào title
+        plt.title(f'Backtest Results - {self.symbol}\n'
+                  f'Win Rate: {results["win_rate"]:.1%} | '
+                  f'Profit Factor: {results["profit_factor"]:.2f} | '
+                  f'Avg Trade: ${results["avg_trade_profit"]:.2f} | '
+                  f'Total Trades: {results["total_trades"]}\n'
+                  f'High Priority: {results["high_priority_trades"]} | '
+                  f'Medium Priority: {results["medium_priority_trades"]} | '
+                  f'Low Priority: {results["low_priority_trades"]}')
+        
+        plt.xlabel('Time')
+        plt.ylabel('Equity ($)')
+        plt.legend()
+        plt.grid(True)
+        
+        # Biểu đồ phân phối lợi nhuận
+        plt.subplot(2, 1, 2)
+        plt.hist(profits, bins=30, edgecolor='black', alpha=0.7)
+        plt.title('Profit Distribution')
+        plt.xlabel('Profit ($)')
+        plt.ylabel('Frequency')
+        plt.grid(True)
+        
+        # Thêm đường thẳng thể hiện lợi nhuận trung bình
+        avg_profit = sum(profits) / len(profits)
+        plt.axvline(avg_profit, color='red', linestyle='dashed', linewidth=2)
+        plt.text(avg_profit, plt.ylim()[1]*0.9, f'Avg Profit: ${avg_profit:.2f}', 
+                 rotation=90, verticalalignment='top', color='red')
+        
+        plt.tight_layout()
+        plt.savefig('backtest_results.png', dpi=300)
+        print("Đã lưu biểu đồ vào file backtest_results.png")
+        plt.close()
 
     def simulate_trade(self, entry: float, sl: float, tp: float, trend: str, 
                       future_prices: pd.Series) -> Tuple[float, bool]:
