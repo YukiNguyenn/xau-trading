@@ -25,20 +25,19 @@ class AdvancedTradingStrategy:
         }
         
         # Risk management
-        self.stop_loss_points = config['trading']['stop_loss_points']
-        self.take_profit_points = config['trading']['take_profit_points']
-        self.trailing_stop_points = config['trading']['trailing_stop_points']
-        self.min_volume = config['trading']['min_volume']
-        self.max_volume = config['trading']['max_volume']
-        self.price_threshold = config['trading']['price_threshold']
-        self.zone_threshold = config['trading']['zone_threshold']
+        self.stop_loss_points = self.config['trading']['stop_loss_points']
+        self.take_profit_points = self.config['trading']['take_profit_points']
+        self.trailing_stop_points = self.config['trading']['trailing_stop_points']
+        self.min_volume = self.config['trading']['min_volume']
+        self.max_volume = self.config['trading']['max_volume']
+        self.price_threshold = self.config['trading']['price_threshold']
+        self.zone_threshold = self.config['trading']['zone_threshold']
         
         # RSI settings
-        rsi_config = config['indicators']['rsi']
-        self.rsi_short_period = rsi_config['periods']['short']
-        self.rsi_medium_period = rsi_config['periods']['medium']
-        self.rsi_long_period = rsi_config['periods']['long']
-        
+        rsi_config = self.config['indicators']['rsi']
+        self.rsi_short = rsi_config['periods']['short']
+        self.rsi_medium = rsi_config['periods']['medium']
+        self.rsi_long = rsi_config['periods']['long']
         self.rsi_short_overbought = rsi_config['thresholds']['short']['overbought']
         self.rsi_short_oversold = rsi_config['thresholds']['short']['oversold']
         self.rsi_medium_overbought = rsi_config['thresholds']['medium']['overbought']
@@ -47,20 +46,29 @@ class AdvancedTradingStrategy:
         self.rsi_long_oversold = rsi_config['thresholds']['long']['oversold']
         
         # MACD settings
-        macd_config = config['indicators']['macd']
+        macd_config = self.config['indicators']['macd']
         self.macd_fast = macd_config['fast']
         self.macd_slow = macd_config['slow']
         self.macd_signal = macd_config['signal']
         
         # Cost settings
-        self.spread_points = config['costs']['spread_points']
-        self.commission = config['costs']['commission']
+        self.spread_points = self.config['costs']['spread_points']
+        self.commission = self.config['costs']['commission']
+        
+        # Position management settings
+        position_config = self.config['position_management']
+        self.max_open_positions = position_config['max_open_positions']
+        self.priority_levels = position_config['priority_levels']
+        
+        # MT5 account settings
+        self.account = self.config['mt5_account']['account']
+        self.password = self.config['mt5_account']['password']
+        self.server = self.config['mt5_account']['server']
         
         # Khởi tạo kết nối MT5
-        if not mt5.initialize():
-            print("Initialize() failed, error code =", mt5.last_error())
+        if not self.initialize_mt5():
             quit()
-        print("MT5 initialized successfully")
+        print("MT5 initialized and logged in successfully")
 
         # Tạo file log nếu chưa tồn tại
         try:
@@ -72,34 +80,125 @@ class AdvancedTradingStrategy:
 
         # Danh sách ticket đang mở
         self.open_tickets = set()
+        
+        # Danh sách các vị thế đang mở
+        self.open_trades = []
 
-        def get_data(self, timeframe, bars):
-            rates = mt5.copy_rates_from_pos(self.symbol, self.timeframes[timeframe], 0, bars)
-            df = pd.DataFrame(rates)
+    def _get_priority(self, rsi_short, rsi_medium, rsi_long, macd_crossover):
+        """Xác định cấp độ ưu tiên của lệnh dựa trên các chỉ báo"""
+        for level in ['high', 'medium', 'low']:
+            level_config = self.priority_levels[level]
+            if (rsi_short <= level_config['rsi_short'] and
+                rsi_medium <= level_config['rsi_medium'] and
+                rsi_long <= level_config['rsi_long'] and
+                (level_config['macd_crossover'] or macd_crossover)):
+                return level
+        return 'low'
+
+    def _close_low_priority_trades(self, new_priority):
+        """Đóng các vị thế có ưu tiên thấp hơn để nhường chỗ cho lệnh mới"""
+        for trade in self.open_trades[:]:  # Copy list để tránh lỗi khi thay đổi trong vòng lặp
+            if trade['priority'] < new_priority:
+                self.close_position(trade['ticket'])
+                self.open_trades.remove(trade)
+
+    def close_position(self, ticket):
+        """Đóng một vị thế cụ thể"""
+        try:
+            position = mt5.positions_get(ticket=ticket)
+            if position:
+                position = position[0]
+                
+                # Tạo lệnh đóng vị thế
+                request = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "symbol": self.symbol,
+                    "volume": position.volume,
+                    "type": mt5.ORDER_TYPE_SELL if position.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY,
+                    "price": mt5.symbol_info_tick(self.symbol).ask if position.type == mt5.ORDER_TYPE_BUY else mt5.symbol_info_tick(self.symbol).bid,
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": mt5.ORDER_FILLING_IOC,
+                    "position": ticket
+                }
+                
+                result = mt5.order_send(request)
+                if result.retcode == mt5.TRADE_RETCODE_DONE:
+                    print(f"Position {ticket} closed successfully")
+                    self.open_tickets.remove(ticket)
+                    return True
+                else:
+                    print(f"Failed to close position {ticket}: {mt5.last_error()}")
+                    return False
+            return False
+            
+        except Exception as e:
+            print(f"Error closing position {ticket}: {str(e)}")
+            return False
+
+    def _load_config(self, config_path):
+        with open(config_path, 'r') as f:
+            return json.load(f)
+
+    def get_data(self, timeframe, bars):
+        rates = mt5.copy_rates_from_pos(self.symbol, self.timeframes[timeframe], 0, bars)
+        df = pd.DataFrame(rates)
+        df['time'] = pd.to_datetime(df['time'], unit='s')
+        return df
+            if len(df) == 0:
+                raise ValueError(f"No data received for {self.symbol} {timeframe}")
+                
             df['time'] = pd.to_datetime(df['time'], unit='s')
             return df
-
-        def calculate_trend(self, timeframe):
-            """Tính toán xu hướng dựa trên EMA50 và EMA200"""
-            df = self.get_data(timeframe, 200)
             
+        except Exception as e:
+            print(f"Error in get_data: {str(e)}")
+            raise ValueError(f"Failed to get data: {str(e)}")
+
+    def calculate_trend(self, timeframe):
+        """
+        Tính toán xu hướng dựa trên EMA50 và EMA200 với xử lý lỗi
+        Returns:
+            str: 'bullish', 'bearish', hoặc 'neutral'
+            str: Thông báo lỗi (nếu có)
+        """
+        try:
+            df = self.get_data(timeframe, 200)
+            if df is None or len(df) < 200:
+                raise ValueError(f"Not enough data for {timeframe} timeframe")
+                
             # Tính EMA
             df['ema50'] = df['close'].ewm(span=50).mean()
             df['ema200'] = df['close'].ewm(span=200).mean()
             
+            if 'ema50' not in df.columns or 'ema200' not in df.columns:
+                raise ValueError("Failed to calculate EMAs")
+                
             last_row = df.iloc[-1]
             
             if last_row['ema50'] > last_row['ema200']:
-                return 'bullish'
+                return 'bullish', ""
             elif last_row['ema50'] < last_row['ema200']:
-                return 'bearish'
+                return 'bearish', ""
             else:
-                return 'neutral'
+                return 'neutral', ""
+                
+        except Exception as e:
+            error_msg = str(e)
+            print(f"Error in calculate_trend: {error_msg}")
+            return 'neutral', error_msg
 
-        def identify_zones(self, timeframe):
-            """Xác định vùng supply/demand trên khung H4"""
+    def identify_zones(self, timeframe):
+        """
+        Xác định vùng supply/demand trên khung H4 với xử lý lỗi
+        Returns:
+            list: Danh sách các vùng supply/demand
+            str: Thông báo lỗi (nếu có)
+        """
+        try:
             df = self.get_data(timeframe, 100)
-            
+            if df is None or len(df) < 100:
+                raise ValueError(f"Not enough data for {timeframe} timeframe")
+                
             zones = []
             for i in range(2, len(df) - 2):
                 current = df.iloc[i]
@@ -132,68 +231,12 @@ class AdvancedTradingStrategy:
                             'time': current['time']
                         })
             
-            return zones
-
-    def get_data(self, timeframe, bars):
-        rates = mt5.copy_rates_from_pos(self.symbol, self.timeframes[timeframe], 0, bars)
-        df = pd.DataFrame(rates)
-        df['time'] = pd.to_datetime(df['time'], unit='s')
-        return df
-
-    def calculate_trend(self, timeframe):
-        """Tính toán xu hướng dựa trên EMA50 và EMA200"""
-        df = self.get_data(timeframe, 200)
-        
-        # Tính EMA
-        df['ema50'] = df['close'].ewm(span=50).mean()
-        df['ema200'] = df['close'].ewm(span=200).mean()
-        
-        last_row = df.iloc[-1]
-        
-        if last_row['ema50'] > last_row['ema200']:
-            return 'bullish'
-        elif last_row['ema50'] < last_row['ema200']:
-            return 'bearish'
-        else:
-            return 'neutral'
-
-    def identify_zones(self, timeframe):
-        """Xác định vùng supply/demand trên khung H4"""
-        df = self.get_data(timeframe, 100)
-        
-        zones = []
-        for i in range(2, len(df) - 2):
-            current = df.iloc[i]
+            return zones, ""
             
-            # Kiểm tra vùng supply
-            if (current['high'] > df.iloc[i-2]['high'] and 
-                current['high'] > df.iloc[i-1]['high'] and 
-                current['high'] > df.iloc[i+1]['high'] and 
-                current['high'] > df.iloc[i+2]['high']):
-                
-                # Kiểm tra phản ứng giảm
-                if df.iloc[i+1]['close'] < current['close']:
-                    zones.append({
-                        'type': 'supply',
-                        'price': current['high'],
-                        'time': current['time']
-                    })
-            
-            # Kiểm tra vùng demand
-            if (current['low'] < df.iloc[i-2]['low'] and 
-                current['low'] < df.iloc[i-1]['low'] and 
-                current['low'] < df.iloc[i+1]['low'] and 
-                current['low'] < df.iloc[i+2]['low']):
-                
-                # Kiểm tra phản ứng tăng
-                if df.iloc[i+1]['close'] > current['close']:
-                    zones.append({
-                        'type': 'demand',
-                        'price': current['low'],
-                        'time': current['time']
-                    })
-        
-        return zones
+        except Exception as e:
+            error_msg = str(e)
+            print(f"Error in identify_zones: {error_msg}")
+            return [], error_msg
 
     def check_breakout(self, price, zones, trend):
         """Kiểm tra xem có breakout không"""
@@ -257,54 +300,13 @@ class AdvancedTradingStrategy:
                             if self.trade_manager.execute_trade(weekly_trend, entry, sl, tp):
                                 print(f"Sell order executed: Entry={entry}, SL={sl}, TP={tp}")
                 
-                # Kiểm tra và cập nhật các lệnh đang mở
-                closed_positions = self.trade_manager.check_open_positions()
-                for pos in closed_positions:
-                    print(f"Position {pos['ticket']} closed with profit: {pos['profit']}")
-                
-                # Cập nhật trailing stop cho các lệnh đang mở
-                # Tính toán các mức vào lệnh
-                entry, sl, tp = self.calculate_levels(current_price, weekly_trend)
-                
-                # Thực hiện giao dịch
-                self.execute_trade(weekly_trend, entry, sl, tp)
-                
-                # Cập nhật trailing stop
-                positions = mt5.positions_get()
-                if positions:
-                    for position in positions:
-                        self.update_trailing_stop(position.ticket)
-                
-                # Kiểm tra và ghi log các lệnh đã đóng
-                positions = mt5.positions_get()
-                if positions:
-                    history = mt5.history_deals_get(datetime.now() - timedelta(hours=1), datetime.now())
-                    if history:
-                        for deal in history:
-                            if deal.position_id in self.open_tickets:
-                                position = mt5.positions_get(ticket=deal.position_id)
-                                if not position:  # Lệnh đã đóng
-                                    self.log_trade(
-                                        deal.position_id,
-                                        deal.price,
-                                        deal.sl,
-                                        deal.tp,
-                                        f"CLOSED: {deal.profit}"
-                                    )
-                                    self.open_tickets.remove(deal.position_id)
-                
-                # Chờ 15 phút trước khi kiểm tra lại
-                time.sleep(900)
-                
-            except Exception as e:
-                print(f"Error: {str(e)}")
-                time.sleep(900)
 
 if __name__ == "__main__":
     strategy = AdvancedTradingStrategy(symbol="XAUUSD")
     strategy.run_strategy()
     supply_zones = []
     demand_zones = []
+
     
     for i in range(len(df_h4) - n_candles):
         high = df_h4['high'].iloc[i:i+n_candles].max()
@@ -330,64 +332,6 @@ def confirm_entry(df_m15, trend, breakout_type):
     # Kiểm tra pullback và xác nhận mô hình nến trên M15
     last_close = df_m15['close'].iloc[-1]
     last_open = df_m15['open'].iloc[-1]
-    
-    if trend == "bullish" and breakout_type == "bullish_breakout":
-        # Bullish pin bar hoặc engulfing
-        if last_close > last_open and (last_close - last_open) / last_open > 0.001:
-            return "buy"
-    elif trend == "bearish" and breakout_type == "bearish_breakout":
-        # Bearish pin bar hoặc engulfing
-        if last_close < last_open and (last_open - last_close) / last_open > 0.001:
-            return "sell"
-    return None
-
-def place_order(symbol, order_type, volume, price, sl, tp):
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
-        "volume": volume,
-        "type": order_type,
-        "price": price,
-        "sl": sl,
-        "tp": tp,
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
-    }
-    result = mt5.order_send(request)
-    if result.retcode != mt5.TRADE_RETCODE_DONE:
-        print("Lệnh thất bại, retcode =", result.retcode)
-        return False
-    print(f"Lệnh {order_type} thành công, ticket =", result.order)
-    return True
-
-def trail_stop(symbol, position, trail_points):
-    point = mt5.symbol_info(symbol).point
-    if position.type == mt5.ORDER_TYPE_BUY:
-        new_sl = mt5.symbol_info_tick(symbol).bid - trail_points * point
-        if new_sl > position.sl:
-            request = {
-                "action": mt5.TRADE_ACTION_SLTP,
-                "position": position.ticket,
-                "sl": new_sl,
-                "tp": position.tp
-            }
-            mt5.order_send(request)
-    elif position.type == mt5.ORDER_TYPE_SELL:
-        new_sl = mt5.symbol_info_tick(symbol).ask + trail_points * point
-        if new_sl < position.sl:
-            request = {
-                "action": mt5.TRADE_ACTION_SLTP,
-                "position": position.ticket,
-                "sl": new_sl,
-                "tp": position.tp
-            }
-            mt5.order_send(request)
-
-def main():
-    # Thông số chiến lược
-    symbol = "XAUUSD"
-    volume = 0.01  # Khối lượng nhỏ cho XAUUSD
-    sl_points = 500  # Stop loss $5
     tp_points = 1000  # Take profit $10 (1:2 RR)
     trail_points = 300  # Trailing stop $3
     

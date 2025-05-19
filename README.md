@@ -36,7 +36,19 @@ xau-trading-bot/
 pip install -r requirements.txt
 ```
 
-2. Đảm bảo MetaTrader 5 đang chạy và kết nối với tài khoản của bạn.
+2. Cấu hình tài khoản MT5:
+   - Mở file `config.json`
+   - Cập nhật thông tin tài khoản MT5:
+   ```json
+   "mt5_account": {
+       "account": "YOUR_ACCOUNT_NUMBER",
+       "password": "YOUR_PASSWORD",
+       "server": "YOUR_SERVER_NAME"
+   }
+   ```
+   - Thay YOUR_ACCOUNT_NUMBER, YOUR_PASSWORD và YOUR_SERVER_NAME bằng thông tin tài khoản MT5 thực tế của bạn
+
+3. Đảm bảo MetaTrader 5 đang chạy và kết nối với tài khoản của bạn.
 
 ## Cấu hình
 

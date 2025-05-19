@@ -40,5 +40,33 @@
     "costs": {
         "spread_points": 20,
         "commission": 0.0001
+    },
+    "position_management": {
+        "max_open_positions": 3,
+        "priority_levels": {
+            "high": {
+                "rsi_short": 80,
+                "rsi_medium": 70,
+                "rsi_long": 60,
+                "macd_crossover": true
+            },
+            "medium": {
+                "rsi_short": 75,
+                "rsi_medium": 65,
+                "rsi_long": 55,
+                "macd_crossover": true
+            },
+            "low": {
+                "rsi_short": 70,
+                "rsi_medium": 60,
+                "rsi_long": 50,
+                "macd_crossover": false
+            }
+        }
+    },
+    "mt5_account": {
+        "account": "YOUR_ACCOUNT_NUMBER",
+        "password": "YOUR_PASSWORD",
+        "server": "YOUR_SERVER_NAME"
     }
 }
