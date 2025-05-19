@@ -1,0 +1,44 @@
+{
+    "trading": {
+        "symbol": "XAUUSD",
+        "stop_loss_points": 500,
+        "take_profit_points": 1000,
+        "trailing_stop_points": 300,
+        "min_volume": 0.01,
+        "max_volume": 1.0,
+        "price_threshold": 0.001,
+        "zone_threshold": 0.005
+    },
+    "indicators": {
+        "rsi": {
+            "periods": {
+                "short": 6,
+                "medium": 14,
+                "long": 24
+            },
+            "thresholds": {
+                "short": {
+                    "overbought": 80,
+                    "oversold": 20
+                },
+                "medium": {
+                    "overbought": 70,
+                    "oversold": 30
+                },
+                "long": {
+                    "overbought": 60,
+                    "oversold": 40
+                }
+            }
+        },
+        "macd": {
+            "fast": 12,
+            "slow": 26,
+            "signal": 9
+        }
+    },
+    "costs": {
+        "spread_points": 20,
+        "commission": 0.0001
+    }
+}

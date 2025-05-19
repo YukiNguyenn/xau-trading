@@ -1,0 +1,4 @@
+python-metatrader5==5.0.42
+pandas==2.0.3
+numpy==1.24.3
+pandas_ta==0.3.14b0

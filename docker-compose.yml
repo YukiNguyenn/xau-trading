@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  trading-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: xau-trading-bot
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Ho_Chi_Minh
+    volumes:
+      - ./trade_logs:/app/trade_logs
+    networks:
+      - trading-network
+
+networks:
+  trading-network:
+    driver: bridge
