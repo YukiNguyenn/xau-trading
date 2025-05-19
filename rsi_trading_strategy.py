@@ -2,9 +2,8 @@ import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pandas_ta import rsi, macd
-
 import json
 import os
 
@@ -13,10 +12,10 @@ class AdvancedTradingStrategy:
         # Load configuration from file
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
         with open(config_path, 'r') as f:
-            config = json.load(f)
+            self.config = json.load(f)
 
         # Trading settings
-        self.symbol = symbol if symbol else config['trading']['symbol']
+        self.symbol = symbol if symbol else self.config['trading']['symbol']
         self.timeframes = {
             'W1': mt5.TIMEFRAME_W1,
             'D1': mt5.TIMEFRAME_D1,
@@ -52,7 +51,7 @@ class AdvancedTradingStrategy:
         self.macd_signal = macd_config['signal']
         
         # Cost settings
-        self.spread_points = self.config['costs']['spread_points']
+        self.spread_points = self.config['costs']['spread']['max_points']  # Updated line
         self.commission = self.config['costs']['commission']
         
         # Position management settings
@@ -65,12 +64,12 @@ class AdvancedTradingStrategy:
         self.password = self.config['mt5_account']['password']
         self.server = self.config['mt5_account']['server']
         
-        # Khởi tạo kết nối MT5
+        # Initialize MT5 connection
         if not self.initialize_mt5():
             quit()
         print("MT5 initialized and logged in successfully")
 
-        # Tạo file log nếu chưa tồn tại
+        # Create trade log file if it doesn't exist
         try:
             with open('trade_log.csv', 'r') as f:
                 pass
@@ -78,15 +77,31 @@ class AdvancedTradingStrategy:
             with open('trade_log.csv', 'w') as f:
                 f.write("time,ticket,entry,sl,tp,result\n")
 
-        # Danh sách ticket đang mở
+        # Track open tickets and trades
         self.open_tickets = set()
-        
-        # Danh sách các vị thế đang mở
         self.open_trades = []
+        
+        # Backtesting attributes
+        self.initial_balance = 10000  # Starting balance for backtesting
+        self.commission_per_trade = 0.0001  # 0.01% commission per trade
+        self.slippage = 0.0001  # 0.01% slippage per trade
+
+    def initialize_mt5(self):
+        """Initialize and login to MT5 platform."""
+        try:
+            if not mt5.initialize():
+                print(f"MT5 initialization failed: {mt5.last_error()}")
+                return False
+            if not mt5.login(self.account, password=self.password, server=self.server):
+                print(f"MT5 login failed: {mt5.last_error()}")
+                return False
+            return True
+        except Exception as e:
+            print(f"Error initializing MT5: {str(e)}")
+            return False
 
     def _get_priority(self, rsi_short, rsi_medium, rsi_long, macd_crossover, breakout_distance):
-        """Xác định cấp độ ưu tiên của lệnh dựa trên các chỉ báo và khoảng cách breakout"""
-        # Tính breakout score với giá trị tối thiểu
+        """Determine trade priority based on indicators and breakout distance."""
         min_score = self.priority_levels['high']['breakout_min_score']
         breakout_score = max(min(breakout_distance / 0.01, 1), min_score)
         
@@ -101,40 +116,34 @@ class AdvancedTradingStrategy:
         return 'low'
 
     def _close_low_priority_trades(self, new_priority):
-        """Đóng các vị thế có ưu tiên thấp hơn để nhường chỗ cho lệnh mới"""
-        for trade in self.open_trades[:]:  # Copy list để tránh lỗi khi thay đổi trong vòng lặp
+        """Close trades with lower priority to make room for new trade."""
+        for trade in self.open_trades[:]:
             if trade['priority'] < new_priority:
                 self.close_position(trade['ticket'])
                 self.open_trades.remove(trade)
 
     def close_position(self, ticket):
-        """Đóng một vị thế cụ thể với xử lý lỗi MT5"""
+        """Close a specific position with error handling."""
         try:
-            # Kiểm tra kết nối MT5
             if not mt5.initialize():
                 print(f"MT5 initialization failed: {mt5.last_error()}")
                 return False
                 
-            # Kiểm tra tài khoản
             if not mt5.login(self.account, password=self.password, server=self.server):
                 print(f"MT5 login failed: {mt5.last_error()}")
                 return False
                 
-            # Lấy thông tin vị thế
             position = mt5.positions_get(ticket=ticket)
             if not position:
                 print(f"Position {ticket} not found")
                 return False
                 
             position = position[0]
-            
-            # Lấy giá hiện tại
             symbol_info = mt5.symbol_info_tick(self.symbol)
             if not symbol_info:
                 print(f"Failed to get symbol info for {self.symbol}")
                 return False
                 
-            # Tạo lệnh đóng vị thế
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
                 "symbol": self.symbol,
@@ -146,7 +155,6 @@ class AdvancedTradingStrategy:
                 "position": ticket
             }
             
-            # Gửi lệnh
             result = mt5.order_send(request)
             if result.retcode == mt5.TRADE_RETCODE_DONE:
                 print(f"Position {ticket} closed successfully")
@@ -161,56 +169,33 @@ class AdvancedTradingStrategy:
             return False
 
     def place_order(self, order_type, volume, price, sl, tp, rsi_values, macd_crossover, breakout_distance):
-        """
-        Đặt lệnh giao dịch với xử lý lỗi và hệ thống ưu tiên
-        Args:
-            order_type: Loại lệnh (mt5.ORDER_TYPE_BUY hoặc mt5.ORDER_TYPE_SELL)
-            volume: Khối lượng giao dịch
-            price: Giá vào lệnh
-            sl: Giá stop loss
-            tp: Giá take profit
-            rsi_values: Tuple (rsi_short, rsi_medium, rsi_long)
-            macd_crossover: True nếu có sự giao nhau của MACD
-            breakout_distance: Khoảng cách breakout
-        Returns:
-            bool: True nếu thành công, False nếu thất bại
-        """
+        """Place a trade order with error handling and priority system."""
         try:
-            # Xác định cấp độ ưu tiên
             priority = self._get_priority(*rsi_values, macd_crossover, breakout_distance)
             
-            # Kiểm tra số lượng vị thế đang mở
             if len(self.open_trades) >= self.max_open_positions and priority != 'low':
                 self._close_low_priority_trades(priority)
                 
-            # Kiểm tra số lượng vị thế đang mở sau khi đóng lệnh
             if len(self.open_trades) >= self.max_open_positions:
                 print("Maximum open positions reached")
                 return False
 
-            # Kiểm tra kết nối MT5
             if not mt5.initialize():
-                error = mt5.last_error()
-                print(f"MT5 initialization failed: {error}")
+                print(f"MT5 initialization failed: {mt5.last_error()}")
                 return False
                 
-            # Kiểm tra tài khoản
             if not mt5.login(self.account, password=self.password, server=self.server):
-                error = mt5.last_error()
-                print(f"MT5 login failed: {error}")
+                print(f"MT5 login failed: {mt5.last_error()}")
                 return False
                 
-            # Kiểm tra khối lượng
             if volume < self.min_volume or volume > self.max_volume:
                 print(f"Invalid volume: {volume}")
                 return False
                 
-            # Kiểm tra giá
             if price <= 0 or sl <= 0 or tp <= 0:
                 print(f"Invalid price: {price}, sl: {sl}, tp: {tp}")
                 return False
                 
-            # Kiểm tra spread hiện tại
             symbol_info = mt5.symbol_info(self.symbol)
             if not symbol_info:
                 print(f"Failed to get symbol info for {self.symbol}")
@@ -221,7 +206,6 @@ class AdvancedTradingStrategy:
                 print(f"Current spread {spread} exceeds maximum allowed {self.spread_points}")
                 return False
                 
-            # Tạo lệnh
             request = {
                 "action": mt5.TRADE_ACTION_DEAL,
                 "symbol": self.symbol,
@@ -234,21 +218,15 @@ class AdvancedTradingStrategy:
                 "type_filling": mt5.ORDER_FILLING_IOC,
             }
             
-            # Gửi lệnh
             result = mt5.order_send(request)
-            
-            # Kiểm tra kết quả
             if result.retcode != mt5.TRADE_RETCODE_DONE:
-                error = mt5.last_error()
-                print(f"Order failed: {error}")
+                print(f"Order failed: {mt5.last_error()}")
                 return False
                 
-            # Kiểm tra ticket trùng
             if result.order in self.open_tickets:
                 print(f"Duplicate ticket {result.order} detected")
                 return False
                 
-            # Lưu thông tin vị thế
             trade = {
                 'ticket': result.order,
                 'entry': price,
@@ -267,38 +245,26 @@ class AdvancedTradingStrategy:
             print(f"Error placing order: {str(e)}")
             return False
 
-    def _load_config(self, config_path):
-        with open(config_path, 'r') as f:
-            return json.load(f)
-
     def get_data(self, timeframe, bars):
-        rates = mt5.copy_rates_from_pos(self.symbol, self.timeframes[timeframe], 0, bars)
-        df = pd.DataFrame(rates)
-        df['time'] = pd.to_datetime(df['time'], unit='s')
-        return df
+        """Fetch historical data from MT5."""
+        try:
+            rates = mt5.copy_rates_from_pos(self.symbol, self.timeframes[timeframe], 0, bars)
+            df = pd.DataFrame(rates)
             if len(df) == 0:
                 raise ValueError(f"No data received for {self.symbol} {timeframe}")
-                
             df['time'] = pd.to_datetime(df['time'], unit='s')
             return df
-            
         except Exception as e:
             print(f"Error in get_data: {str(e)}")
             raise ValueError(f"Failed to get data: {str(e)}")
 
     def calculate_trend(self, timeframe):
-        """
-        Tính toán xu hướng dựa trên EMA50 và EMA200 với xử lý lỗi
-        Returns:
-            str: 'bullish', 'bearish', hoặc 'neutral'
-            str: Thông báo lỗi (nếu có)
-        """
+        """Calculate trend based on EMA50 and EMA200."""
         try:
             df = self.get_data(timeframe, 200)
             if df is None or len(df) < 200:
                 raise ValueError(f"Not enough data for {timeframe} timeframe")
                 
-            # Tính EMA
             df['ema50'] = df['close'].ewm(span=50).mean()
             df['ema200'] = df['close'].ewm(span=200).mean()
             
@@ -320,12 +286,7 @@ class AdvancedTradingStrategy:
             return 'neutral', error_msg
 
     def identify_zones(self, timeframe):
-        """
-        Xác định vùng supply/demand trên khung H4 với xử lý lỗi
-        Returns:
-            list: Danh sách các vùng supply/demand
-            str: Thông báo lỗi (nếu có)
-        """
+        """Identify supply/demand zones on H4 timeframe."""
         try:
             df = self.get_data(timeframe, 100)
             if df is None or len(df) < 100:
@@ -335,13 +296,10 @@ class AdvancedTradingStrategy:
             for i in range(2, len(df) - 2):
                 current = df.iloc[i]
                 
-                # Kiểm tra vùng supply
                 if (current['high'] > df.iloc[i-2]['high'] and 
                     current['high'] > df.iloc[i-1]['high'] and 
                     current['high'] > df.iloc[i+1]['high'] and 
                     current['high'] > df.iloc[i+2]['high']):
-                    
-                    # Kiểm tra phản ứng giảm
                     if df.iloc[i+1]['close'] < current['close']:
                         zones.append({
                             'type': 'supply',
@@ -349,13 +307,10 @@ class AdvancedTradingStrategy:
                             'time': current['time']
                         })
                 
-                # Kiểm tra vùng demand
                 if (current['low'] < df.iloc[i-2]['low'] and 
                     current['low'] < df.iloc[i-1]['low'] and 
                     current['low'] < df.iloc[i+1]['low'] and 
                     current['low'] < df.iloc[i+2]['low']):
-                    
-                    # Kiểm tra phản ứng tăng
                     if df.iloc[i+1]['close'] > current['close']:
                         zones.append({
                             'type': 'demand',
@@ -371,7 +326,7 @@ class AdvancedTradingStrategy:
             return [], error_msg
 
     def check_breakout(self, price, zones, trend):
-        """Kiểm tra xem có breakout không"""
+        """Check for breakout from supply/demand zones."""
         for zone in zones:
             if zone['type'] == 'supply' and trend == 'bearish':
                 if price < zone['price'] * (1 - self.zone_threshold):
@@ -382,143 +337,122 @@ class AdvancedTradingStrategy:
         return False
 
     def check_candle_pattern(self, df):
-        """Kiểm tra mô hình nến (pin bar hoặc engulfing)"""
+        """Check for pin bar or engulfing candle patterns."""
         last = df.iloc[-1]
         prev = df.iloc[-2]
         
-        # Kiểm tra pin bar
         if abs(last['open'] - last['close']) < self.price_threshold * last['close']:
             if last['high'] - max(last['open'], last['close']) > 2 * abs(last['open'] - last['close']):
                 return 'pin_bar'
             if min(last['open'], last['close']) - last['low'] > 2 * abs(last['open'] - last['close']):
                 return 'pin_bar'
         
-        # Kiểm tra engulfing
         if (last['open'] < prev['close'] and 
             last['close'] > prev['open'] and 
+            last['high'] > prev['high'] and 
+            last['low'] < prev['low']):
+            return 'engulfing'
+        
+        return None
+
+    def calculate_rsi_indicators(self, df):
+        """Calculate RSI for short, medium, and long periods."""
+        rsi_short = rsi(df['close'], length=self.rsi_short).iloc[-1]
+        rsi_medium = rsi(df['close'], length=self.rsi_medium).iloc[-1]
+        rsi_long = rsi(df['close'], length=self.rsi_long).iloc[-1]
+        return rsi_short, rsi_medium, rsi_long
+
+    def check_rsi_signals(self, rsi_short, rsi_medium, rsi_long, trend):
+        """Check RSI signals based on trend."""
+        if trend == 'bullish':
+            if (rsi_short < self.rsi_short_oversold and
+                rsi_medium < self.rsi_medium_oversold and
+                rsi_long < self.rsi_long_oversold):
+                return True, 'buy'
+        elif trend == 'bearish':
+            if (rsi_short > self.rsi_short_overbought and
+                rsi_medium > self.rsi_medium_overbought and
+                rsi_long > self.rsi_long_overbought):
+                return True, 'sell'
+        return False, None
+
+    def calculate_macd(self, df):
+        """Calculate MACD and signal line."""
+        macd_df = macd(df['close'], fast=self.macd_fast, slow=self.macd_slow, signal=self.macd_signal)
+        return macd_df['MACD_12_26_9'].iloc[-1], macd_df['MACDs_12_26_9'].iloc[-1]
+
+    def calculate_levels(self, price, trend):
+        """Calculate entry, stop loss, and take profit levels."""
+        point = mt5.symbol_info(self.symbol).point
+        if trend == 'bullish':
+            entry = price
+            sl = price - self.stop_loss_points * point
+            tp = price + self.take_profit_points * point
+        else:  # bearish
+            entry = price
+            sl = price + self.stop_loss_points * point
+            tp = price - self.take_profit_points * point
+        return entry, sl, tp
+
     def run_strategy(self):
-        """Chạy chiến lược giao dịch"""
+        """Run the trading strategy."""
         while True:
             try:
-                # Lấy dữ liệu
-                m15_df = self.utils.get_data(self.symbol, timeframes['M15'], 200)
-                h4_df = self.utils.get_data(self.symbol, timeframes['H4'], 100)
+                # Fetch data
+                m15_df = self.get_data('M15', 200)
+                h4_df = self.get_data('H4', 100)
                 
-                # Xác định xu hướng
-                weekly_trend = self.utils.calculate_trend('D1')
+                # Determine trend
+                weekly_trend, _ = self.calculate_trend('D1')
                 
-                # Kiểm tra breakout
-                zones = self.utils.identify_zones('H4')
+                # Check breakout
+                zones, _ = self.identify_zones('H4')
                 price = h4_df['close'].iloc[-1]
                 
-                if self.utils.check_breakout(price, zones, weekly_trend):
-                    # Kiểm tra RSI và MACD
-                    rsi_short, rsi_medium, rsi_long = self.indicators.calculate_rsi_indicators(m15_df)
-                    macd, macd_signal = self.indicators.calculate_macd(m15_df)
-                    prev_macd, prev_signal = self.indicators.calculate_macd(m15_df.iloc[:-1])
+                if self.check_breakout(price, zones, weekly_trend):
+                    # Calculate indicators
+                    rsi_short, rsi_medium, rsi_long = self.calculate_rsi_indicators(m15_df)
+                    macd, macd_signal = self.calculate_macd(m15_df)
+                    prev_macd, prev_signal = self.calculate_macd(m15_df.iloc[:-1])
                     
-                    # Kiểm tra tín hiệu RSI
-                    rsi_signal, _ = self.indicators.check_rsi_signals(rsi_short, rsi_medium, rsi_long, weekly_trend)
+                    # Check RSI signals
+                    rsi_signal, signal_type = self.check_rsi_signals(rsi_short, rsi_medium, rsi_long, weekly_trend)
                     
                     if rsi_signal:
                         if weekly_trend == 'bullish' and prev_macd < prev_signal and macd > macd_signal:
                             print("Bullish signal confirmed")
-                            entry, sl, tp = self.backtest.calculate_levels(price, weekly_trend)
-                            if self.trade_manager.execute_trade(weekly_trend, entry, sl, tp):
-                                print(f"Buy order executed: Entry={entry}, SL={sl}, TP={tp}")
+                            entry, sl, tp = self.calculate_levels(price, weekly_trend)
+                            breakout_distance = abs(price - zones[0]['price']) if zones else 0
+                            self.place_order(mt5.ORDER_TYPE_BUY, self.min_volume, entry, sl, tp,
+                                           (rsi_short, rsi_medium, rsi_long), True, breakout_distance)
+                            print(f"Buy order executed: Entry={entry}, SL={sl}, TP={tp}")
                         elif weekly_trend == 'bearish' and prev_macd > prev_signal and macd < macd_signal:
                             print("Bearish signal confirmed")
-                            entry, sl, tp = self.backtest.calculate_levels(price, weekly_trend)
-                            if self.trade_manager.execute_trade(weekly_trend, entry, sl, tp):
-                                print(f"Sell order executed: Entry={entry}, SL={sl}, TP={tp}")
+                            entry, sl, tp = self.calculate_levels(price, weekly_trend)
+                            breakout_distance = abs(price - zones[0]['price']) if zones else 0
+                            self.place_order(mt5.ORDER_TYPE_SELL, self.min_volume, entry, sl, tp,
+                                           (rsi_short, rsi_medium, rsi_long), True, breakout_distance)
+                            print(f"Sell order executed: Entry={entry}, SL={sl}, TP={tp}")
                 
+                # Sleep for 15 minutes
+                time.sleep(900)
+                
+            except KeyboardInterrupt:
+                print("Strategy stopped by user")
+                break
+            except Exception as e:
+                print(f"Error in run_strategy: {str(e)}")
+                time.sleep(60)  # Wait before retrying
 
-if __name__ == "__main__":
+def main():
+    """Initialize and run the trading strategy."""
     strategy = AdvancedTradingStrategy(symbol="XAUUSD")
     strategy.run_strategy()
-    supply_zones = []
-    demand_zones = []
-
-    
-    for i in range(len(df_h4) - n_candles):
-        high = df_h4['high'].iloc[i:i+n_candles].max()
-        low = df_h4['low'].iloc[i:i+n_candles].min()
-        if df_h4['close'].iloc[i+n_candles-1] < df_h4['open'].iloc[i+n_candles-1]:
-            supply_zones.append((high, high * 1.005))  # Vùng supply ±0.5%
-        else:
-            demand_zones.append((low * 0.995, low))    # Vùng demand ±0.5%
-    
-    return supply_zones, demand_zones
-
-def check_breakout(df_h4, supply_zones, demand_zones):
-    last_price = df_h4['close'].iloc[-1]
-    for zone in demand_zones:
-        if zone[0] < last_price < zone[1]:
-            return "bullish_breakout"
-    for zone in supply_zones:
-        if zone[0] < last_price < zone[1]:
-            return "bearish_breakout"
-    return None
-
-def confirm_entry(df_m15, trend, breakout_type):
-    # Kiểm tra pullback và xác nhận mô hình nến trên M15
-    last_close = df_m15['close'].iloc[-1]
-    last_open = df_m15['open'].iloc[-1]
-    tp_points = 1000  # Take profit $10 (1:2 RR)
-    trail_points = 300  # Trailing stop $3
-    
-    if not initialize_mt5():
-        return
-    
-    try:
-        while True:
-            # 1. Phân tích xu hướng W1 và D1
-            df_weekly = get_data(symbol, mt5.TIMEFRAME_W1, 200)
-            df_daily = get_data(symbol, mt5.TIMEFRAME_D1, 200)
-            trend = determine_trend(df_daily, df_weekly)
-            print(f"Trend: {trend}")
-            
-            # 2. Xác định vùng supply/demand trên H4
-            df_h4 = get_data(symbol, mt5.TIMEFRAME_H4, 100)
-            supply_zones, demand_zones = identify_zones(df_h4)
-            print(f"Supply zones: {len(supply_zones)}, Demand zones: {len(demand_zones)}")
-            
-            # 3. Kiểm tra breakout
-            breakout_type = check_breakout(df_h4, supply_zones, demand_zones)
-            
-            # 4. Tinh chỉnh điểm vào lệnh trên M15
-            if breakout_type:
-                df_m15 = get_data(symbol, mt5.TIMEFRAME_M15, 50)
-                entry_signal = confirm_entry(df_m15, trend, breakout_type)
-                
-                # 5. Đặt lệnh và quản lý rủi ro
-                if entry_signal and not mt5.positions_get(symbol=symbol):
-                    point = mt5.symbol_info(symbol).point
-                    last_price = df_m15['close'].iloc[-1]
-                    
-                    if entry_signal == "buy":
-                        sl = last_price - sl_points * point
-                        tp = last_price + tp_points * point
-                        place_order(symbol, mt5.ORDER_TYPE_BUY, volume, 
-                                   mt5.symbol_info_tick(symbol).ask, sl, tp)
-                    elif entry_signal == "sell":
-                        sl = last_price + sl_points * point
-                        tp = last_price - tp_points * point
-                        place_order(symbol, mt5.ORDER_TYPE_SELL, volume, 
-                                   mt5.symbol_info_tick(symbol).bid, sl, tp)
-            
-            # 6. Theo dõi và điều chỉnh
-            positions = mt5.positions_get(symbol=symbol)
-            for pos in positions:
-                trail_stop(symbol, pos, trail_points)
-            
-            print(f"Time: {datetime.datetime.now()}, Price: {df_h4['close'].iloc[-1]:.2f}")
-            time.sleep(900)  # Chờ 15 phút
-            
-    except KeyboardInterrupt:
-        print("Dừng chiến lược")
-    finally:
-        mt5.shutdown()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("Program terminated by user")
+    finally:
+        mt5.shutdown()
