@@ -72,8 +72,8 @@
         }
     },
     "mt5_account": {
-        "account": "YOUR_ACCOUNT_NUMBER",
-        "password": "YOUR_PASSWORD",
-        "server": "YOUR_SERVER_NAME"
+        "account": "204596757",
+        "password": "12345678aA@",
+        "server": "Exness-MT5Trial7"
     }
 }
