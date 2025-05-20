@@ -43,7 +43,7 @@ class BacktestManager:
         config_path: str,
         start_date: datetime,
         end_date: datetime,
-        initial_balance: float = 10000.0,
+        initial_balance: float = 100.0,
         leverage: int = 2000,
         logger: Optional[logging.Logger] = None
     ):
@@ -510,7 +510,7 @@ def main():
             config_path="backtest/config/backtest_config.json",
             start_date=start_date,
             end_date=END_DATE,
-            initial_balance=10000.0,
+            initial_balance=100.0,
             leverage=2000
         )
         
