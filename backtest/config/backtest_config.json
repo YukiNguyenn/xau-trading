@@ -15,7 +15,7 @@
         "stop_loss_points": 100,
         "take_profit_points": 200,
         "trailing_stop_points": 50,
-        "max_daily_loss": 1000,
+        "max_daily_loss": 10,
         "max_drawdown": 0.1
     },
     "position": {

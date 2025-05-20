@@ -89,7 +89,8 @@ Example configuration:
         "min_volume": 0.01,
         "max_volume": 1.0,
         "stop_loss_points": 100,
-        "take_profit_points": 200
+        "take_profit_points": 200,
+        "initial_balance": 100.0
     },
     "indicators": {
         "rsi": {
@@ -114,12 +115,27 @@ Example configuration:
             }
         },
         "ma": {
-            "fast": 10,
-            "slow": 50
+            "fast": 34,
+            "medium": 89,
+            "slow": 200,
+            "min_bars": 1000
         }
     }
 }
 ```
+
+### Important Notes
+
+1. Initial Balance:
+   - Default initial balance for backtesting is set to $100
+   - Risk management parameters are adjusted accordingly
+
+2. EMA Calculation Requirements:
+   - EMA 34: Minimum 34 bars
+   - EMA 89: Minimum 89 bars
+   - EMA 200: Minimum 200 bars
+   - Recommended: At least 1000 bars for stable signals
+   - The bot automatically fetches sufficient historical data
 
 ## Usage
 
