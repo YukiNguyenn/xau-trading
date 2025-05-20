@@ -1,0 +1,82 @@
+{
+    "trading": {
+        "min_volume": 0.01,
+        "max_volume": 0.1,
+        "stop_loss_points": 100,
+        "take_profit_points": 200,
+        "max_open_positions": 20,
+        "commission": 0.0001,
+        "spread_points": 5,
+        "zone_threshold": 0.001,
+        "atr_multiplier": 2.0,
+        "price_precision": 2
+    },
+    "risk": {
+        "stop_loss_points": 100,
+        "take_profit_points": 200,
+        "trailing_stop_points": 50,
+        "max_daily_loss": 1000,
+        "max_drawdown": 0.1
+    },
+    "position": {
+        "max_open_positions": 20,
+        "priority_levels": {
+            "high": {
+                "rsi_short": 70,
+                "rsi_medium": 70,
+                "rsi_long": 70,
+                "macd_crossover": true
+            },
+            "medium": {
+                "rsi_short": 60,
+                "rsi_medium": 60,
+                "rsi_long": 60,
+                "macd_crossover": true
+            }
+        }
+    },
+    "indicators": {
+        "rsi": {
+            "periods": {
+                "short": 6,
+                "medium": 14,
+                "long": 24
+            },
+            "thresholds": {
+                "short": {
+                    "overbought": 70,
+                    "oversold": 30
+                },
+                "medium": {
+                    "overbought": 70,
+                    "oversold": 30
+                },
+                "long": {
+                    "overbought": 70,
+                    "oversold": 30
+                }
+            }
+        },
+        "macd": {
+            "fast": 12,
+            "slow": 26,
+            "signal": 9
+        },
+        "ma": {
+            "fast": 34,
+            "medium": 89,
+            "slow": 200,
+            "type": "ema",
+            "periods": {
+                "fast": 34,
+                "medium": 89,
+                "slow": 200
+            }
+        }
+    },
+    "costs": {
+        "spread": {
+            "max_points": 5
+        }
+    }
+} 

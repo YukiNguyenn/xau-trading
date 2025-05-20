@@ -1,5 +1,5 @@
 import pytest
-from rsi_trading_strategy import AdvancedTradingStrategy
+from strategies import AdvancedTradingStrategy
 import mock
 import mt5
 

@@ -1,0 +1,1 @@
+timestamp,symbol,order_type,volume,entry_price,sl,tp,strategy_name,rsi_short,rsi_medium,rsi_long,macd_crossover,breakout_distance
