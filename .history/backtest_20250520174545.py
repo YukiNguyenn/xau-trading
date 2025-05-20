@@ -256,20 +256,14 @@ class BacktestManager:
                     
                     if all_rates:
                         try:
-                            # Convert rates to DataFrame using a different approach
-                            new_data = pd.DataFrame()
-                            new_data['time'] = [pd.to_datetime(rate['time'], unit='s') for rate in all_rates]
-                            new_data['open'] = [rate['open'] for rate in all_rates]
-                            new_data['high'] = [rate['high'] for rate in all_rates]
-                            new_data['low'] = [rate['low'] for rate in all_rates]
-                            new_data['close'] = [rate['close'] for rate in all_rates]
-                            new_data['tick_volume'] = [rate['tick_volume'] for rate in all_rates]
-                            new_data['spread'] = [rate['spread'] for rate in all_rates]
-                            new_data['real_volume'] = [rate['real_volume'] for rate in all_rates]
+                            # Convert rates to DataFrame with proper column names
+                            new_data = pd.DataFrame(all_rates)
+                            new_data.columns = ['time', 'open', 'high', 'low', 'close', 'tick_volume', 'spread', 'real_volume']
+                            new_data['time'] = pd.to_datetime(new_data['time'], unit='s')
                             
-                            # Log the structure of the data after processing
-                            self.logger.info(f"Processed {tf_name} data columns: {new_data.columns.tolist()}")
-                            self.logger.info(f"Processed {tf_name} data shape: {new_data.shape}")
+                            # Log the structure of the data
+                            self.logger.info(f"{tf_name} data columns: {new_data.columns.tolist()}")
+                            self.logger.info(f"{tf_name} data shape: {new_data.shape}")
                         except Exception as e:
                             self.logger.error(f"Error processing {tf_name} data: {str(e)}")
                             if existing_data is not None:
@@ -297,20 +291,14 @@ class BacktestManager:
                                 data[tf_name] = existing_data
                             continue
                         
-                        # Convert rates to DataFrame using a different approach
-                        new_data = pd.DataFrame()
-                        new_data['time'] = [pd.to_datetime(rate['time'], unit='s') for rate in rates]
-                        new_data['open'] = [rate['open'] for rate in rates]
-                        new_data['high'] = [rate['high'] for rate in rates]
-                        new_data['low'] = [rate['low'] for rate in rates]
-                        new_data['close'] = [rate['close'] for rate in rates]
-                        new_data['tick_volume'] = [rate['tick_volume'] for rate in rates]
-                        new_data['spread'] = [rate['spread'] for rate in rates]
-                        new_data['real_volume'] = [rate['real_volume'] for rate in rates]
+                        # Convert rates to DataFrame with proper column names
+                        new_data = pd.DataFrame(rates)
+                        new_data.columns = ['time', 'open', 'high', 'low', 'close', 'tick_volume', 'spread', 'real_volume']
+                        new_data['time'] = pd.to_datetime(new_data['time'], unit='s')
                         
-                        # Log the structure of the data after processing
-                        self.logger.info(f"Processed {tf_name} data columns: {new_data.columns.tolist()}")
-                        self.logger.info(f"Processed {tf_name} data shape: {new_data.shape}")
+                        # Log the structure of the data
+                        self.logger.info(f"{tf_name} data columns: {new_data.columns.tolist()}")
+                        self.logger.info(f"{tf_name} data shape: {new_data.shape}")
                     except Exception as e:
                         self.logger.error(f"Error fetching {tf_name} data: {str(e)}")
                         if existing_data is not None:
@@ -406,20 +394,14 @@ class BacktestManager:
                             data[tf_name] = existing_data
                         continue
                     
-                    # Convert rates to DataFrame using a different approach
-                    new_data = pd.DataFrame()
-                    new_data['time'] = [pd.to_datetime(rate['time'], unit='s') for rate in rates]
-                    new_data['open'] = [rate['open'] for rate in rates]
-                    new_data['high'] = [rate['high'] for rate in rates]
-                    new_data['low'] = [rate['low'] for rate in rates]
-                    new_data['close'] = [rate['close'] for rate in rates]
-                    new_data['tick_volume'] = [rate['tick_volume'] for rate in rates]
-                    new_data['spread'] = [rate['spread'] for rate in rates]
-                    new_data['real_volume'] = [rate['real_volume'] for rate in rates]
+                    # Convert rates to DataFrame with proper column names
+                    new_data = pd.DataFrame(rates)
+                    new_data.columns = ['time', 'open', 'high', 'low', 'close', 'tick_volume', 'spread', 'real_volume']
+                    new_data['time'] = pd.to_datetime(new_data['time'], unit='s')
                     
-                    # Log the structure of the data after processing
-                    self.logger.info(f"Processed {tf_name} data columns: {new_data.columns.tolist()}")
-                    self.logger.info(f"Processed {tf_name} data shape: {new_data.shape}")
+                    # Log the structure of the data
+                    self.logger.info(f"{tf_name} data columns: {new_data.columns.tolist()}")
+                    self.logger.info(f"{tf_name} data shape: {new_data.shape}")
                 except Exception as e:
                     self.logger.error(f"Error fetching {tf_name} data: {str(e)}")
                     if existing_data is not None:

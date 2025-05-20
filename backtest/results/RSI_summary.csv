@@ -1,2 +1,2 @@
 strategy,initial_balance,final_balance,total_profit,win_rate,profit_factor,total_trades,max_drawdown,leverage
-RSI,100.0,100.002,0.001999999999995339,1.0,inf,1,0.0,2000
+RSI,100.0,99.9995,-0.0005000000000023874,0.0,-1.0,1,0.0,2000

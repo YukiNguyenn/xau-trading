@@ -1,10 +1,3 @@
-"""
-Multi-Timeframe RSI Trading Strategy
-
-This module implements an RSI-based trading strategy that uses multiple timeframes
-(H1, M15, M5) with configurable overbought/oversold levels to generate trading signals.
-"""
-
 import logging
 import os
 import time
@@ -78,6 +71,9 @@ class MultiTimeframeRSIStrategy(BaseTradingStrategy):
             "M15": rsi_config["periods"]["medium"],
             "M5": rsi_config["periods"]["short"],
         }
+        # Thêm tham số cho ATR và rủi ro
+        self.atr_multiplier = self.config.get("trading", {}).get("atr_multiplier", 2.0)
+        self.risk_percentage = self.config.get("trading", {}).get("risk_percentage", 0.01)
 
     def _setup_logger(self, name: str) -> logging.Logger:
         """Set up a logger for the strategy."""
@@ -109,6 +105,7 @@ class MultiTimeframeRSIStrategy(BaseTradingStrategy):
             "M5": pd.Timedelta(minutes=5),
             "M15": pd.Timedelta(minutes=15),
             "H1": pd.Timedelta(hours=1),
+            "D1": pd.Timedelta(days=1),
         }.get(timeframe, pd.Timedelta(minutes=15))
         end_date = pd.Timestamp.now()
         times = pd.date_range(end=end_date, periods=bars, freq=delta)
@@ -190,6 +187,47 @@ class MultiTimeframeRSIStrategy(BaseTradingStrategy):
             self.logger.error(f"Error in get_rsi_signal for {timeframe}: {str(e)}")
             return 0.0, "neutral"
 
+    def determine_trend(self, d1_df: pd.DataFrame) -> str:
+        """Determine market trend using EMA200 on D1."""
+        if d1_df is None or len(d1_df) < 200:
+            self.logger.warning("Insufficient D1 data for trend determination")
+            return "neutral"
+        ema200 = d1_df['close'].ewm(span=200, adjust=False).mean().iloc[-1]
+        last_close = d1_df['close'].iloc[-1]
+        if last_close > ema200:
+            return "bullish"
+        elif last_close < ema200:
+            return "bearish"
+        else:
+            return "neutral"
+
+    def is_bullish_crossover(self, macd: pd.Series, signal: pd.Series, lookback: int = 3) -> bool:
+        """Check for bullish MACD crossover in the last 'lookback' bars."""
+        for i in range(1, lookback + 1):
+            if len(macd) < i + 1:
+                return False
+            if macd.iloc[-i - 1] < signal.iloc[-i - 1] and macd.iloc[-i] > signal.iloc[-i]:
+                return True
+        return False
+
+    def is_bearish_crossover(self, macd: pd.Series, signal: pd.Series, lookback: int = 3) -> bool:
+        """Check for bearish MACD crossover in the last 'lookback' bars."""
+        for i in range(1, lookback + 1):
+            if len(macd) < i + 1:
+                return False
+            if macd.iloc[-i - 1] > signal.iloc[-i - 1] and macd.iloc[-i] < signal.iloc[-i]:
+                return True
+        return False
+
+    def calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
+        """Calculate ATR (Average True Range) on the dataframe."""
+        high_low = df['high'] - df['low']
+        high_close = np.abs(df['high'] - df['close'].shift())
+        low_close = np.abs(df['low'] - df['close'].shift())
+        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        atr = tr.rolling(window=period).mean().iloc[-1]
+        return atr
+
     def check_signals(
         self,
         m15_df: pd.DataFrame,
@@ -198,7 +236,7 @@ class MultiTimeframeRSIStrategy(BaseTradingStrategy):
         m5_df: Optional[pd.DataFrame] = None,
         h1_df: Optional[pd.DataFrame] = None
     ) -> Tuple[bool, Optional[str], float]:
-        """Check for trading signals based on RSI across multiple timeframes."""
+        """Check for trading signals based on RSI, trend, and MACD confirmation."""
         try:
             if m15_df is None or len(m15_df) < self.rsi_periods["M15"]:
                 self.logger.warning("Insufficient M15 data")
@@ -215,33 +253,66 @@ class MultiTimeframeRSIStrategy(BaseTradingStrategy):
                 f"M15: {m15_rsi:.2f} ({m15_signal}), M5: {m5_rsi:.2f} ({m5_signal})"
             )
             strength = 0.0
+            potential_signal = None
+
             if h1_signal == "overbought" and (m15_signal == "overbought" or m5_signal == "overbought"):
-                strength = min(1.0, (h1_rsi - self.timeframe_levels["H1"]["overbought"]) / 10 + (m5_rsi - self.timeframe_levels["M5"]["overbought"]) / 20)
-                self.last_signal_time = current_time
-                self.logger.info("Sell signal: H1 overbought with M15 or M5 confirmation")
-                return True, "sell", max(0.1, strength)
-            if h1_signal == "oversold" and (m15_signal == "oversold" or m5_signal == "oversold"):
-                strength = min(1.0, (self.timeframe_levels["H1"]["oversold"] - h1_rsi) / 5 + (self.timeframe_levels["M5"]["oversold"] - m5_rsi) / 10)
-                self.last_signal_time = current_time
-                self.logger.info("Buy signal: H1 oversold with M15 or M5 confirmation")
-                return True, "buy", max(0.1, strength)
-            return False, None, 0.0
+                potential_signal = "sell"
+                strength = min(1.0, (h1_rsi - self.timeframe_levels["H1"]["overbought"]) / 10 + 
+                                    (m5_rsi - self.timeframe_levels["M5"]["overbought"]) / 20)
+            elif h1_signal == "oversold" and (m15_signal == "oversold" or m5_signal == "oversold"):
+                potential_signal = "buy"
+                strength = min(1.0, (self.timeframe_levels["H1"]["oversold"] - h1_rsi) / 5 + 
+                                    (self.timeframe_levels["M5"]["oversold"] - m5_rsi) / 10)
+
+            if potential_signal is None:
+                return False, None, 0.0
+
+            # Check D1 trend alignment
+            trend = self.determine_trend(d1_df)
+            if (potential_signal == "buy" and trend != "bullish") or \
+               (potential_signal == "sell" and trend != "bearish"):
+                self.logger.info(f"Signal {potential_signal} does not align with trend {trend}")
+                return False, None, 0.0
+
+            # MACD confirmation on M15
+            macd, signal_line = calculate_macd(m15_df['close'], fast=12, slow=26, signal=9)
+            if potential_signal == "buy" and not self.is_bullish_crossover(macd, signal_line):
+                self.logger.info("No bullish MACD crossover for buy signal")
+                return False, None, 0.0
+            elif potential_signal == "sell" and not self.is_bearish_crossover(macd, signal_line):
+                self.logger.info("No bearish MACD crossover for sell signal")
+                return False, None, 0.0
+
+            self.last_signal_time = current_time
+            self.logger.info(f"{potential_signal.capitalize()} signal confirmed with trend and MACD")
+            return True, potential_signal, max(0.1, strength)
         except Exception as e:
             self.logger.error(f"Error in check_signals: {str(e)}")
             return False, None, 0.0
 
-    def calculate_levels(self, price: float, trend: str) -> Tuple[float, float, float]:
-        """Calculate entry, stop loss, and take profit levels."""
+    def calculate_levels(self, price: float, trend: str, df: pd.DataFrame = None) -> Tuple[float, float, float]:
+        """Calculate entry, stop loss, and take profit levels using ATR."""
         try:
-            point = mt5.symbol_info(self.symbol).point if mt5.symbol_info(self.symbol) else 0.01
-            if trend == "buy":
-                entry = price
-                stop_loss = entry - self.stop_loss_points * point
-                take_profit = entry + self.take_profit_points * point
+            if df is not None:
+                atr = self.calculate_atr(df)
+                if trend == "buy":
+                    entry = price
+                    stop_loss = entry - self.atr_multiplier * atr
+                    take_profit = entry + self.atr_multiplier * 2 * atr  # 2:1 ratio
+                else:
+                    entry = price
+                    stop_loss = entry + self.atr_multiplier * atr
+                    take_profit = entry - self.atr_multiplier * 2 * atr
             else:
-                entry = price
-                stop_loss = entry + self.stop_loss_points * point
-                take_profit = entry - self.take_profit_points * point
+                point = mt5.symbol_info(self.symbol).point if mt5.symbol_info(self.symbol) else 0.01
+                if trend == "buy":
+                    entry = price
+                    stop_loss = entry - self.stop_loss_points * point
+                    take_profit = entry + self.take_profit_points * point
+                else:
+                    entry = price
+                    stop_loss = entry + self.stop_loss_points * point
+                    take_profit = entry - self.take_profit_points * point
             return entry, stop_loss, take_profit
         except Exception as e:
             self.logger.error(f"Error in calculate_levels: {str(e)}")
@@ -276,7 +347,7 @@ class MultiTimeframeRSIStrategy(BaseTradingStrategy):
             return self.min_volume
 
     def run_strategy(self) -> None:
-        """Execute the trading strategy."""
+        """Execute the trading strategy with dynamic risk management."""
         try:
             m5_df = self.get_data("M5", 400)
             m15_df = self.get_data("M15", 200)
@@ -297,14 +368,29 @@ class MultiTimeframeRSIStrategy(BaseTradingStrategy):
                 time.sleep(60)
                 return
             current_price = tick.ask if signal_type == "buy" else tick.bid
-            entry, sl, tp = self.calculate_levels(current_price, signal_type)
+            entry, sl, tp = self.calculate_levels(current_price, signal_type, m15_df)
+
+            # Calculate volume based on risk
+            if self.use_mock_data:
+                balance = self.initial_balance
+            else:
+                account_info = mt5.account_info()
+                if account_info is None:
+                    self.logger.error("Failed to get account info")
+                    time.sleep(60)
+                    return
+                balance = account_info.balance
+            risk_amount = balance * self.risk_percentage
+            sl_distance = abs(entry - sl) / self.point  # in points
+            volume = self.calculate_volume(risk_amount, sl_distance)
+
             order_type = mt5.ORDER_TYPE_BUY if signal_type == "buy" else mt5.ORDER_TYPE_SELL
             h1_rsi, _ = self.get_rsi_signal("H1", h1_df)
             m15_rsi, _ = self.get_rsi_signal("M15", m15_df)
             m5_rsi, _ = self.get_rsi_signal("M5", m5_df)
             self.place_order(
                 order_type=order_type,
-                volume=self.min_volume,
+                volume=volume,
                 price=entry,
                 sl=sl,
                 tp=tp,
@@ -314,7 +400,7 @@ class MultiTimeframeRSIStrategy(BaseTradingStrategy):
                 breakout_distance=strength,
             )
             self.logger.info(
-                f"Placed {signal_type} order: Entry={entry:.5f}, SL={sl:.5f}, TP={tp:.5f}"
+                f"Placed {signal_type} order: Entry={entry:.5f}, SL={sl:.5f}, TP={tp:.5f}, Volume={volume}"
             )
             time.sleep(900)
         except Exception as e:

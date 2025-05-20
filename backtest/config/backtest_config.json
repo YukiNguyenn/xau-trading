@@ -2,8 +2,8 @@
     "trading": {
         "min_volume": 0.01,
         "max_volume": 0.1,
-        "stop_loss_points": 100,
-        "take_profit_points": 200,
+        "stop_loss_points": 50,
+        "take_profit_points": 100,
         "max_open_positions": 20,
         "commission": 0.0001,
         "spread_points": 5,
@@ -12,9 +12,9 @@
         "price_precision": 2
     },
     "risk": {
-        "stop_loss_points": 100,
-        "take_profit_points": 200,
-        "trailing_stop_points": 50,
+        "stop_loss_points": 50,
+        "take_profit_points": 100,
+        "trailing_stop_points": 20,
         "max_daily_loss": 10,
         "max_drawdown": 0.1
     },

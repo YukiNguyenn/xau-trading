@@ -256,20 +256,10 @@ class BacktestManager:
                     
                     if all_rates:
                         try:
-                            # Convert rates to DataFrame using a different approach
-                            new_data = pd.DataFrame()
-                            new_data['time'] = [pd.to_datetime(rate['time'], unit='s') for rate in all_rates]
-                            new_data['open'] = [rate['open'] for rate in all_rates]
-                            new_data['high'] = [rate['high'] for rate in all_rates]
-                            new_data['low'] = [rate['low'] for rate in all_rates]
-                            new_data['close'] = [rate['close'] for rate in all_rates]
-                            new_data['tick_volume'] = [rate['tick_volume'] for rate in all_rates]
-                            new_data['spread'] = [rate['spread'] for rate in all_rates]
-                            new_data['real_volume'] = [rate['real_volume'] for rate in all_rates]
-                            
-                            # Log the structure of the data after processing
-                            self.logger.info(f"Processed {tf_name} data columns: {new_data.columns.tolist()}")
-                            self.logger.info(f"Processed {tf_name} data shape: {new_data.shape}")
+                            new_data = pd.DataFrame(all_rates)
+                            if 'time' not in new_data.columns:
+                                raise ValueError(f"Missing 'time' column in {tf_name} data from MT5")
+                            new_data['time'] = pd.to_datetime(new_data['time'], unit='s')
                         except Exception as e:
                             self.logger.error(f"Error processing {tf_name} data: {str(e)}")
                             if existing_data is not None:
@@ -297,20 +287,10 @@ class BacktestManager:
                                 data[tf_name] = existing_data
                             continue
                         
-                        # Convert rates to DataFrame using a different approach
-                        new_data = pd.DataFrame()
-                        new_data['time'] = [pd.to_datetime(rate['time'], unit='s') for rate in rates]
-                        new_data['open'] = [rate['open'] for rate in rates]
-                        new_data['high'] = [rate['high'] for rate in rates]
-                        new_data['low'] = [rate['low'] for rate in rates]
-                        new_data['close'] = [rate['close'] for rate in rates]
-                        new_data['tick_volume'] = [rate['tick_volume'] for rate in rates]
-                        new_data['spread'] = [rate['spread'] for rate in rates]
-                        new_data['real_volume'] = [rate['real_volume'] for rate in rates]
-                        
-                        # Log the structure of the data after processing
-                        self.logger.info(f"Processed {tf_name} data columns: {new_data.columns.tolist()}")
-                        self.logger.info(f"Processed {tf_name} data shape: {new_data.shape}")
+                        new_data = pd.DataFrame(rates)
+                        if 'time' not in new_data.columns:
+                            raise ValueError(f"Missing 'time' column in {tf_name} data from MT5")
+                        new_data['time'] = pd.to_datetime(new_data['time'], unit='s')
                     except Exception as e:
                         self.logger.error(f"Error fetching {tf_name} data: {str(e)}")
                         if existing_data is not None:
@@ -406,20 +386,10 @@ class BacktestManager:
                             data[tf_name] = existing_data
                         continue
                     
-                    # Convert rates to DataFrame using a different approach
-                    new_data = pd.DataFrame()
-                    new_data['time'] = [pd.to_datetime(rate['time'], unit='s') for rate in rates]
-                    new_data['open'] = [rate['open'] for rate in rates]
-                    new_data['high'] = [rate['high'] for rate in rates]
-                    new_data['low'] = [rate['low'] for rate in rates]
-                    new_data['close'] = [rate['close'] for rate in rates]
-                    new_data['tick_volume'] = [rate['tick_volume'] for rate in rates]
-                    new_data['spread'] = [rate['spread'] for rate in rates]
-                    new_data['real_volume'] = [rate['real_volume'] for rate in rates]
-                    
-                    # Log the structure of the data after processing
-                    self.logger.info(f"Processed {tf_name} data columns: {new_data.columns.tolist()}")
-                    self.logger.info(f"Processed {tf_name} data shape: {new_data.shape}")
+                    new_data = pd.DataFrame(rates)
+                    if 'time' not in new_data.columns:
+                        raise ValueError(f"Missing 'time' column in {tf_name} data from MT5")
+                    new_data['time'] = pd.to_datetime(new_data['time'], unit='s')
                 except Exception as e:
                     self.logger.error(f"Error fetching {tf_name} data: {str(e)}")
                     if existing_data is not None:

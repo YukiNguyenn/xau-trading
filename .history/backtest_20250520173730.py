@@ -145,24 +145,6 @@ class BacktestManager:
         # MT5 limits
         MAX_CANDLES = 67000  # Maximum candles that can be loaded at once
         
-        # Calculate required days for each timeframe
-        required_days = {
-            'M5': 365 + 200,  # 1 year + 200 days for indicators
-            'M15': 365 + 200,  # 1 year + 200 days for indicators
-            'H1': 365 * 2,    # 2 years
-            'H4': 365 * 2,    # 2 years
-            'D1': 365 + 200   # 1 year + 200 days for indicators
-        }
-        
-        # Calculate required bars for each timeframe
-        required_bars = {
-            'M5': required_days['M5'] * 24 * 12,  # 12 bars per hour * 24 hours * days
-            'M15': required_days['M15'] * 24 * 4,  # 4 bars per hour * 24 hours * days
-            'H1': required_days['H1'] * 24,       # 24 bars per day * days
-            'H4': required_days['H4'] * 6,        # 6 bars per day * days
-            'D1': required_days['D1']             # 1 bar per day * days
-        }
-        
         # Calculate maximum days we can load for each timeframe
         max_days = {
             'M5': MAX_CANDLES // (24 * 12),    # 12 bars per hour * 24 hours
@@ -172,13 +154,20 @@ class BacktestManager:
             'D1': MAX_CANDLES                  # 1 bar per day
         }
         
-        self.logger.info(f"Required days for each timeframe:")
-        for tf, days in required_days.items():
-            self.logger.info(f"{tf}: {days} days")
-        
         self.logger.info(f"Maximum days that can be loaded for each timeframe:")
         for tf, days in max_days.items():
             self.logger.info(f"{tf}: {days} days")
+        
+        # Calculate required bars for each timeframe based on BACKTEST_DAYS
+        # Add 200 days for technical indicators
+        total_days = BACKTEST_DAYS + 200
+        required_bars = {
+            'M5': total_days * 24 * 12,  # 12 bars per hour * 24 hours * days
+            'M15': total_days * 24 * 4,  # 4 bars per hour * 24 hours * days
+            'H1': total_days * 24,       # 24 bars per day * days
+            'H4': total_days * 6,        # 6 bars per day * days
+            'D1': total_days             # 1 bar per day * days
+        }
         
         # Create data directory structure
         data_dir = os.path.join('data', self.symbol)
@@ -198,33 +187,24 @@ class BacktestManager:
                 
                 # Try to load existing data
                 if os.path.exists(csv_file):
-                    try:
-                        self.logger.info(f"Loading {tf_name} data from {csv_file}")
-                        existing_data = pd.read_csv(csv_file)
-                        if 'time' not in existing_data.columns:
-                            self.logger.error(f"Missing 'time' column in {tf_name} data")
-                            existing_data = None
-                        else:
-                            existing_data['time'] = pd.to_datetime(existing_data['time'])
-                            
-                            # Check if we have enough data
-                            if len(existing_data) >= required_bars[tf_name]:
-                                self.logger.info(f"Using existing {tf_name} data with {len(existing_data)} bars")
-                                data[tf_name] = existing_data
-                                continue
-                            else:
-                                self.logger.info(f"Existing {tf_name} data has {len(existing_data)} bars")
-                                # Calculate how many more days we need
-                                days_needed = (required_bars[tf_name] - len(existing_data)) / (24 * (12 if tf_name == 'M5' else 4))
-                                start_date = self.end_date - timedelta(days=min(days_needed, max_days[tf_name]))
-                    except Exception as e:
-                        self.logger.error(f"Error loading existing {tf_name} data: {str(e)}")
-                        existing_data = None
-                
-                if existing_data is None:
-                    self.logger.info(f"No existing {tf_name} data found or error loading, will download from {start_date}")
+                    self.logger.info(f"Loading {tf_name} data from {csv_file}")
+                    existing_data = pd.read_csv(csv_file)
+                    existing_data['time'] = pd.to_datetime(existing_data['time'])
+                    
+                    # Check if we have enough data
+                    if len(existing_data) >= required_bars[tf_name]:
+                        self.logger.info(f"Using existing {tf_name} data with {len(existing_data)} bars")
+                        data[tf_name] = existing_data
+                        continue
+                    else:
+                        self.logger.info(f"Existing {tf_name} data has {len(existing_data)} bars")
+                        # Calculate how many more days we need
+                        days_needed = (required_bars[tf_name] - len(existing_data)) / (24 * (12 if tf_name == 'M5' else 4))
+                        start_date = self.end_date - timedelta(days=min(days_needed, max_days[tf_name]))
+                else:
+                    self.logger.info(f"No existing {tf_name} data found, will download from {start_date}")
                     # Limit start date based on max days
-                    start_date = self.end_date - timedelta(days=min(required_days[tf_name], max_days[tf_name]))
+                    start_date = self.end_date - timedelta(days=max_days[tf_name])
                 
                 # For M5 and M15, try loading in smaller chunks
                 if tf_name in ['M5', 'M15']:
@@ -236,45 +216,24 @@ class BacktestManager:
                         current_end = min(current_start + chunk_size, self.end_date)
                         self.logger.info(f"Fetching {tf_name} data chunk from {current_start} to {current_end}")
                         
-                        try:
-                            rates = mt5.copy_rates_range(
-                                self.symbol,
-                                tf,
-                                current_start,
-                                current_end
-                            )
-                            
-                            if rates is not None and len(rates) > 0:
-                                all_rates.extend(rates)
-                                self.logger.info(f"Loaded {len(rates)} {tf_name} bars for chunk")
-                            else:
-                                self.logger.warning(f"No data received for {tf_name} chunk from {current_start} to {current_end}")
-                        except Exception as e:
-                            self.logger.error(f"Error fetching {tf_name} chunk: {str(e)}")
+                        rates = mt5.copy_rates_range(
+                            self.symbol,
+                            tf,
+                            current_start,
+                            current_end
+                        )
+                        
+                        if rates is not None and len(rates) > 0:
+                            all_rates.extend(rates)
+                            self.logger.info(f"Loaded {len(rates)} {tf_name} bars for chunk")
+                        else:
+                            self.logger.warning(f"No data received for {tf_name} chunk from {current_start} to {current_end}")
                         
                         current_start = current_end
                     
                     if all_rates:
-                        try:
-                            # Convert rates to DataFrame using a different approach
-                            new_data = pd.DataFrame()
-                            new_data['time'] = [pd.to_datetime(rate['time'], unit='s') for rate in all_rates]
-                            new_data['open'] = [rate['open'] for rate in all_rates]
-                            new_data['high'] = [rate['high'] for rate in all_rates]
-                            new_data['low'] = [rate['low'] for rate in all_rates]
-                            new_data['close'] = [rate['close'] for rate in all_rates]
-                            new_data['tick_volume'] = [rate['tick_volume'] for rate in all_rates]
-                            new_data['spread'] = [rate['spread'] for rate in all_rates]
-                            new_data['real_volume'] = [rate['real_volume'] for rate in all_rates]
-                            
-                            # Log the structure of the data after processing
-                            self.logger.info(f"Processed {tf_name} data columns: {new_data.columns.tolist()}")
-                            self.logger.info(f"Processed {tf_name} data shape: {new_data.shape}")
-                        except Exception as e:
-                            self.logger.error(f"Error processing {tf_name} data: {str(e)}")
-                            if existing_data is not None:
-                                data[tf_name] = existing_data
-                            continue
+                        new_data = pd.DataFrame(all_rates)
+                        new_data['time'] = pd.to_datetime(new_data['time'], unit='s')
                     else:
                         self.logger.error(f"No {tf_name} data received from MT5")
                         if existing_data is not None:
@@ -283,50 +242,28 @@ class BacktestManager:
                 else:
                     # For other timeframes, load normally
                     self.logger.info(f"Fetching {tf_name} data from MT5 from {start_date} to {self.end_date}")
-                    try:
-                        rates = mt5.copy_rates_range(
-                            self.symbol,
-                            tf,
-                            start_date,
-                            self.end_date
-                        )
-                        
-                        if rates is None or len(rates) == 0:
-                            self.logger.error(f"No data received from MT5 for {self.symbol} {tf_name}")
-                            if existing_data is not None:
-                                data[tf_name] = existing_data
-                            continue
-                        
-                        # Convert rates to DataFrame using a different approach
-                        new_data = pd.DataFrame()
-                        new_data['time'] = [pd.to_datetime(rate['time'], unit='s') for rate in rates]
-                        new_data['open'] = [rate['open'] for rate in rates]
-                        new_data['high'] = [rate['high'] for rate in rates]
-                        new_data['low'] = [rate['low'] for rate in rates]
-                        new_data['close'] = [rate['close'] for rate in rates]
-                        new_data['tick_volume'] = [rate['tick_volume'] for rate in rates]
-                        new_data['spread'] = [rate['spread'] for rate in rates]
-                        new_data['real_volume'] = [rate['real_volume'] for rate in rates]
-                        
-                        # Log the structure of the data after processing
-                        self.logger.info(f"Processed {tf_name} data columns: {new_data.columns.tolist()}")
-                        self.logger.info(f"Processed {tf_name} data shape: {new_data.shape}")
-                    except Exception as e:
-                        self.logger.error(f"Error fetching {tf_name} data: {str(e)}")
+                    rates = mt5.copy_rates_range(
+                        self.symbol,
+                        tf,
+                        start_date,
+                        self.end_date
+                    )
+                    
+                    if rates is None or len(rates) == 0:
+                        self.logger.error(f"No data received from MT5 for {self.symbol} {tf_name}")
                         if existing_data is not None:
                             data[tf_name] = existing_data
                         continue
+                    
+                    new_data = pd.DataFrame(rates)
+                    new_data['time'] = pd.to_datetime(new_data['time'], unit='s')
                 
                 # Combine with existing data if available
                 if existing_data is not None:
-                    try:
-                        combined_data = pd.concat([existing_data, new_data])
-                        combined_data = combined_data.drop_duplicates(subset=['time'])
-                        combined_data = combined_data.sort_values('time')
-                        data[tf_name] = combined_data
-                    except Exception as e:
-                        self.logger.error(f"Error combining {tf_name} data: {str(e)}")
-                        data[tf_name] = new_data
+                    combined_data = pd.concat([existing_data, new_data])
+                    combined_data = combined_data.drop_duplicates(subset=['time'])
+                    combined_data = combined_data.sort_values('time')
+                    data[tf_name] = combined_data
                 else:
                     data[tf_name] = new_data
                 
@@ -334,11 +271,8 @@ class BacktestManager:
                 self.logger.info(f"Loaded {len(data[tf_name])} {tf_name} bars")
                 
                 # Save to CSV
-                try:
-                    data[tf_name].to_csv(csv_file, index=False)
-                    self.logger.info(f"Saved {len(data[tf_name])} {tf_name} bars to {csv_file}")
-                except Exception as e:
-                    self.logger.error(f"Error saving {tf_name} data to CSV: {str(e)}")
+                data[tf_name].to_csv(csv_file, index=False)
+                self.logger.info(f"Saved {len(data[tf_name])} {tf_name} bars to {csv_file}")
                 
             except Exception as e:
                 self.logger.error(f"Error loading {tf_name} data: {str(e)}")
@@ -362,80 +296,50 @@ class BacktestManager:
                 
                 # Try to load existing data
                 if os.path.exists(csv_file):
-                    try:
-                        self.logger.info(f"Loading {tf_name} data from {csv_file}")
-                        existing_data = pd.read_csv(csv_file)
-                        if 'time' not in existing_data.columns:
-                            self.logger.error(f"Missing 'time' column in {tf_name} data")
-                            existing_data = None
-                        else:
-                            existing_data['time'] = pd.to_datetime(existing_data['time'])
-                            
-                            # Check if we have enough data
-                            if len(existing_data) >= required_bars[tf_name]:
-                                self.logger.info(f"Using existing {tf_name} data with {len(existing_data)} bars")
-                                data[tf_name] = existing_data
-                                continue
-                            else:
-                                self.logger.info(f"Existing {tf_name} data has {len(existing_data)} bars")
-                                # Calculate how many more days we need
-                                days_needed = (required_bars[tf_name] - len(existing_data)) / (24 * (6 if tf_name == 'H4' else 1))
-                                start_date = self.end_date - timedelta(days=min(days_needed, max_days[tf_name]))
-                    except Exception as e:
-                        self.logger.error(f"Error loading existing {tf_name} data: {str(e)}")
-                        existing_data = None
-                
-                if existing_data is None:
-                    self.logger.info(f"No existing {tf_name} data found or error loading, will download from {start_date}")
+                    self.logger.info(f"Loading {tf_name} data from {csv_file}")
+                    existing_data = pd.read_csv(csv_file)
+                    existing_data['time'] = pd.to_datetime(existing_data['time'])
+                    
+                    # Check if we have enough data
+                    if len(existing_data) >= required_bars[tf_name]:
+                        self.logger.info(f"Using existing {tf_name} data with {len(existing_data)} bars")
+                        data[tf_name] = existing_data
+                        continue
+                    else:
+                        self.logger.info(f"Existing {tf_name} data has {len(existing_data)} bars")
+                        # Calculate how many more days we need
+                        days_needed = (required_bars[tf_name] - len(existing_data)) / (24 * (6 if tf_name == 'H4' else 1))
+                        start_date = self.end_date - timedelta(days=min(days_needed, max_days[tf_name]))
+                else:
+                    self.logger.info(f"No existing {tf_name} data found, will download from {start_date}")
                     # Limit start date based on max days
-                    start_date = self.end_date - timedelta(days=min(required_days[tf_name], max_days[tf_name]))
+                    start_date = self.end_date - timedelta(days=max_days[tf_name])
                 
                 # Fetch new data from MT5
                 self.logger.info(f"Fetching {tf_name} data from MT5 from {start_date} to {self.end_date}")
-                try:
-                    rates = mt5.copy_rates_range(
-                        self.symbol,
-                        tf,
-                        start_date,
-                        self.end_date
-                    )
-                    
-                    if rates is None or len(rates) == 0:
-                        self.logger.error(f"No data received from MT5 for {self.symbol} {tf_name}")
-                        if existing_data is not None:
-                            data[tf_name] = existing_data
-                        continue
-                    
-                    # Convert rates to DataFrame using a different approach
-                    new_data = pd.DataFrame()
-                    new_data['time'] = [pd.to_datetime(rate['time'], unit='s') for rate in rates]
-                    new_data['open'] = [rate['open'] for rate in rates]
-                    new_data['high'] = [rate['high'] for rate in rates]
-                    new_data['low'] = [rate['low'] for rate in rates]
-                    new_data['close'] = [rate['close'] for rate in rates]
-                    new_data['tick_volume'] = [rate['tick_volume'] for rate in rates]
-                    new_data['spread'] = [rate['spread'] for rate in rates]
-                    new_data['real_volume'] = [rate['real_volume'] for rate in rates]
-                    
-                    # Log the structure of the data after processing
-                    self.logger.info(f"Processed {tf_name} data columns: {new_data.columns.tolist()}")
-                    self.logger.info(f"Processed {tf_name} data shape: {new_data.shape}")
-                except Exception as e:
-                    self.logger.error(f"Error fetching {tf_name} data: {str(e)}")
+                rates = mt5.copy_rates_range(
+                    self.symbol,
+                    tf,
+                    start_date,
+                    self.end_date
+                )
+                
+                if rates is None or len(rates) == 0:
+                    self.logger.error(f"No data received from MT5 for {self.symbol} {tf_name}")
                     if existing_data is not None:
                         data[tf_name] = existing_data
                     continue
                 
+                # Convert to DataFrame
+                new_data = pd.DataFrame(rates)
+                new_data['time'] = pd.to_datetime(new_data['time'], unit='s')
+                
                 # Combine with existing data if available
                 if existing_data is not None:
-                    try:
-                        combined_data = pd.concat([existing_data, new_data])
-                        combined_data = combined_data.drop_duplicates(subset=['time'])
-                        combined_data = combined_data.sort_values('time')
-                        data[tf_name] = combined_data
-                    except Exception as e:
-                        self.logger.error(f"Error combining {tf_name} data: {str(e)}")
-                        data[tf_name] = new_data
+                    combined_data = pd.concat([existing_data, new_data])
+                    combined_data = combined_data.drop_duplicates(subset=['time'])
+                    combined_data = combined_data.sort_values('time')
+                    data[tf_name] = combined_data
                 else:
                     data[tf_name] = new_data
                 
@@ -443,11 +347,8 @@ class BacktestManager:
                 self.logger.info(f"Loaded {len(data[tf_name])} {tf_name} bars")
                 
                 # Save to CSV
-                try:
-                    data[tf_name].to_csv(csv_file, index=False)
-                    self.logger.info(f"Saved {len(data[tf_name])} {tf_name} bars to {csv_file}")
-                except Exception as e:
-                    self.logger.error(f"Error saving {tf_name} data to CSV: {str(e)}")
+                data[tf_name].to_csv(csv_file, index=False)
+                self.logger.info(f"Saved {len(data[tf_name])} {tf_name} bars to {csv_file}")
                 
             except Exception as e:
                 self.logger.error(f"Error loading {tf_name} data: {str(e)}")

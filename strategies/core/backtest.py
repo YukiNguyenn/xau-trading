@@ -395,106 +395,28 @@ class Backtest:
         profit -= commission
         
         return profit, trade_closed
-        """Giả lập kết quả giao dịch"""
-        profit = 0
-        trade_closed = False
-        current_sl = sl
-        
-        # Giới hạn future_prices tối đa 50 nến
-        future_prices = future_prices[:50]
-        
-        for j, future_price in enumerate(future_prices):
-            # Kiểm tra trailing stop
-            if trend == 'bullish':
-                if future_price > entry + self.trailing_stop_points * self.point:
-                    current_sl = max(current_sl, future_price - self.stop_loss_points * self.point)
-            else:
-                if future_price < entry - self.trailing_stop_points * self.point:
-                    current_sl = min(current_sl, future_price + self.stop_loss_points * self.point)
-            
-            # Kiểm tra các điều kiện đóng lệnh
-            if trend == 'bullish':
-                if future_price >= tp:
-                    profit = (tp - entry - self.spread_points * self.point) * 0.1
-                    trade_closed = True
-                    break
-                elif future_price <= current_sl:
-                    profit = (current_sl - entry - self.spread_points * self.point) * 0.1
-                    trade_closed = True
-                    break
-            else:
-                if future_price <= tp:
-                    profit = (entry - tp - self.spread_points * self.point) * 0.1
-                    trade_closed = True
-                    break
-                elif future_price >= current_sl:
-                    profit = (entry - current_sl - self.spread_points * self.point) * 0.1
-                    trade_closed = True
-                    break
-            
-            # Kiểm tra thời gian tối đa (1 tuần, 24 nến H4)
-            if j >= 24:
-                if trend == 'bullish':
-                    profit = (future_price - entry - self.spread_points * self.point) * 0.1
-                else:
-                    profit = (entry - future_price - self.spread_points * self.point) * 0.1
-                trade_closed = True
-                break
-        
-        # Nếu không đóng trong 50 nến, tính lợi nhuận tại nến cuối
-        if not trade_closed and len(future_prices) > 0:
-            if trend == 'bullish':
-                profit = (future_prices.iloc[-1] - entry - self.spread_points * self.point) * 0.1
-            else:
-                profit = (entry - future_prices.iloc[-1] - self.spread_points * self.point) * 0.1
-            trade_closed = True
-        
-        # Tính toán phí giao dịch
-        commission = entry * self.commission
-        profit -= commission
-        
-        return profit, trade_closed
-            if trend == 'bullish':
-                if future_price > entry + self.trading_params['trailing_stop_points'] * self.point:
-                    current_sl = max(current_sl, future_price - self.risk_params['stop_loss_points'] * self.point)
-            else:
-                if future_price < entry - self.trading_params['trailing_stop_points'] * self.point:
-                    current_sl = min(current_sl, future_price + self.risk_params['stop_loss_points'] * self.point)
-            
-            # Kiểm tra các điều kiện đóng lệnh
-            if (trend == 'bullish' and future_price >= tp) or \
-               (trend == 'bearish' and future_price <= tp):
-                profit = self.calculate_profit(entry, tp, trend)
-                trade_closed = True
-                break
-            elif (trend == 'bullish' and future_price <= current_sl) or \
-                 (trend == 'bearish' and future_price >= current_sl):
-                profit = self.calculate_profit(entry, current_sl, trend)
-                trade_closed = True
-                break
-            
-            # Kiểm tra thời gian tối đa
-            if j >= self.trading_params['max_week_duration']:
-                profit = self.calculate_profit(entry, future_price, trend)
-                trade_closed = True
-                break
-        
-        # Nếu không đóng trong thời gian tối đa
-        if not trade_closed and len(future_prices) > 0:
-            profit = self.calculate_profit(entry, future_prices.iloc[-1], trend)
-            trade_closed = True
-        
-        return profit, trade_closed
 
     def calculate_profit(self, entry: float, exit: float, trend: str) -> float:
-        """Tính lợi nhuận của lệnh giao dịch"""
+        """Tính lợi nhuận của lệnh giao dịch với đòn bẩy 2000x"""
+        point = self.get_point()
+        if point is None:
+            return 0.0
+            
+        # Tính số points
         if trend == 'bullish':
-            profit = (exit - entry - self.trading_params['spread_points'] * self.point) * 0.1
+            points = (exit - entry - self.trading_params['spread_points'] * point) / point
         else:
-            profit = (entry - exit - self.trading_params['spread_points'] * self.point) * 0.1
+            points = (entry - exit - self.trading_params['spread_points'] * point) / point
+            
+        # Tính profit với đòn bẩy 2000x
+        # Với 0.1 lot, mỗi point = $0.1
+        # Với đòn bẩy 2000x, mỗi point = $0.1 * 2000 = $200
+        profit = points * 0.1 * 2000
         
         # Trừ commission
-        profit -= entry * self.trading_params['commission']
+        commission = entry * self.trading_params['commission']
+        profit -= commission
+        
         return profit
 
     def calculate_stats(self, trades: List[Dict]) -> Dict:
